@@ -1,0 +1,3 @@
+CHAPTER 1. Main
+
+Main is of type Main Void.  Main is print line "Hello, world!".

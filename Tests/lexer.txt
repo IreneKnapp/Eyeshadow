@@ -1,0 +1,35 @@
+CHAPTER 1. Foo
+
+Colorless green ideas sleep furiously.  The horse raced past the barn fell.
+
+"Colorless green ideas sleep furiously.  
+The horse raced past the barn fell."
+
+"Colorless green ideas sleep furiously."  
+"The horse raced past the barn fell."
+
+Something's something.
+
+Lorem ipsum dolor sic amet.
+
+Purple-people eater.  Purple people-eater.  +5 sword of purple-people-eater 
+slaying.  +5 sword of (purple people) eater slaying.  +5 sword of (purple 
+people)-eater slaying.  (+1 snack food of eating.  +2 sentence of 
+sentencing.)  (-1 snack food of health.  -2 milkshake of weight loss.)  
+Notice how en and em dashes – like parentheses – can set phrases off.
+
+(do: This.  That.  The other.).  (list: a, b, c).  Foo: bar: baz.
+foo:bar foo:+ foo:- foo:*.
+
+'(- 12 5) `(- ,foo 5)
+
+`(- (+ ,@foo) 5)
+
+`(- (+ ,@(if foo is a list then foo else the singleton list of foo)) 5)
+
+foo + - ++foo foo++ 5++ ++5 ++ --foo foo-- 5-- --5 -- -foo - foo 
+-5 +5 - 5 + 5 += -= +! +!+ -! -!- +!- -!+
+
+"\"\r\n\u0022foo\U00000022"
+
+Main is of type IO Unit.  Main is putStrLn "Hello, world!".
