@@ -22,6 +22,7 @@ module Lexer
 
 import Prelude hiding (Show(..))
 
+import Control.Monad.IO.Class
 import Data.Conduit
 import Data.Map (Map)
 import qualified Data.Map as Map
@@ -666,9 +667,18 @@ classify lexer character =
                                  Nothing -> UnknownClassification
 
 
-runLexer :: Lexer -> Conduit Text (ResourceT IO) Token
+runLexer :: (MonadIO m) => Lexer -> Conduit Text m Token
 runLexer lexer = do
-  let loop = do
+  let loopTexts :: (Monad m) => Conduit Text m Char
+      loopTexts = do
+        maybeText <- await
+        case maybeText of
+          Nothing -> return ()
+          Just text -> do
+            mapM_ yield $ T.unpack text
+            loopTexts
+      loopCharacters :: (MonadIO m) => Conduit Char m Token
+      loopCharacters = do
         maybeCharacter <- await
         case maybeCharacter of
           Nothing -> return ()
@@ -679,8 +689,8 @@ runLexer lexer = do
                                         spanEnd = startPosition
                                       }
                       }
-            loop
-  loop
+            loopCharacters
+  loopTexts =$= loopCharacters
 
 
 startPosition :: Position
