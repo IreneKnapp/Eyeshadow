@@ -23,6 +23,7 @@ module Lexer
 import Prelude hiding (Show(..))
 
 import Control.Monad.IO.Class
+import Control.Monad.State.Strict
 import Data.Conduit
 import Data.Map (Map)
 import qualified Data.Map as Map
@@ -132,21 +133,19 @@ data Lexer =
     }
 
 
-data LexerMonad a =
+newtype LexerMonad a =
   LexerMonad {
-      lexerMonadAction
-        :: LexerState
-        -> LexerTemporaryState
-        -> IO (a, LexerState, LexerTemporaryState)
+      lexerMonadAction :: StateT (LexerState, LexerTemporaryState)
+                                 (Pipe Char Char Token () IO)
+                                 a
     }
 
 
 instance Monad LexerMonad where
-  return a = LexerMonad $ \state temporaryState -> do
-    return (a, state, temporaryState)
-  a >>= b = LexerMonad $ \state temporaryState -> do
-    (value, state, temporaryState) <- lexerMonadAction a state temporaryState
-    lexerMonadAction (b value) state temporaryState
+  return value = LexerMonad $ return value
+  a >>= b = LexerMonad $ do
+    value <- lexerMonadAction a
+    lexerMonadAction $ b value
 
 
 defaultClassificationMap :: Map Char Classification
@@ -732,25 +731,27 @@ lexerAction lexer state maybeCharacter =
 
 
 getLexerState :: LexerMonad LexerState
-getLexerState =
-  LexerMonad $ \state temporaryState ->
-    return (state, state, temporaryState)
+getLexerState = LexerMonad $ do
+  (state, _) <- get
+  return state
 
 
 putLexerState :: LexerState -> LexerMonad ()
-putLexerState state =
-  LexerMonad $ \_ temporaryState ->
-    return ((), state, temporaryState)
+putLexerState state = LexerMonad $ do
+  (_, temporaryState) <- get
+  put (state, temporaryState)
 
 
 getLexerTemporaryState :: LexerMonad LexerTemporaryState
-getLexerTemporaryState =
-  LexerMonad $ \state temporaryState -> return (temporaryState, state, temporaryState)
+getLexerTemporaryState = LexerMonad $ do
+  (_, temporaryState) <- get
+  return temporaryState
 
 
 putLexerTemporaryState :: LexerTemporaryState -> LexerMonad ()
-putLexerTemporaryState temporaryState =
-  LexerMonad $ \state _ -> return ((), state, temporaryState)
+putLexerTemporaryState temporaryState = LexerMonad $ do
+  (state, _) <- get
+  put (state, temporaryState)
 
 
 initResult :: LexerMonad ()
