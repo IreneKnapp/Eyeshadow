@@ -757,15 +757,18 @@ endToken tokenType = LexerMonad $ do
     Nothing -> return ()
     Just startPosition -> do
       let endPosition = lexerStatePosition state
+          text = lexerStateAccumulator state
       put $ state {
-                lexerStateSavedPosition = Nothing
+                lexerStateSavedPosition = Nothing,
+                lexerStateAccumulator = Text.empty
               }
       lift $ yield $ Token {
                          tokenType = tokenType,
                          tokenSpan = Span {
                                          spanStart = startPosition,
                                          spanEnd = startPosition
-                                       }
+                                       },
+                         tokenText = text
                        }
 
 
