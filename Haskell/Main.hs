@@ -21,7 +21,6 @@ main = do
     [sourceFilePath] -> do
       runResourceT
         $ sourceFile sourceFilePath
-        $= decode utf8
         $= runLexer defaultLexer
         $= C.map show
         $= encode utf8

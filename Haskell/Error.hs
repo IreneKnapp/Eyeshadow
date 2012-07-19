@@ -7,7 +7,7 @@ module Error
 
 data Position =
   Position {
-      positionOffset :: Int,
+      positionCharacter :: Int,
       positionByte :: Int,
       positionLine :: Int,
       positionColumn :: Int

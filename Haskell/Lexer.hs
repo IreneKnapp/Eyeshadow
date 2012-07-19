@@ -36,9 +36,12 @@ import Knapp.Show
 import Unicode
 
 
+data TokenType = TokenType
 data Token =
   Token {
-      tokenSpan :: Span
+      tokenType :: TokenType,
+      tokenSpan :: Span,
+      tokenText :: Text
     }
 instance Show Token where
   show token = "<token>"
@@ -109,15 +112,11 @@ data LexerState =
   LexerState {
       lexerStatePosition :: Position,
       lexerStatePreviousWasCarriageReturn :: Bool,
+      lexerStatePreviousEndedLine :: Bool,
       lexerStateSavedPosition :: Maybe Position,
-      lexerStateData :: LexerStateData
-    }
-
-
-data LexerTemporaryState =
-  LexerTemporaryState {
-      lexerTemporaryStateCharacter :: Char,
-      lexerTemporaryStateClassification :: Classification
+      lexerStateAccumulator :: Text,
+      lexerStateData :: LexerStateData,
+      lexerStateCurrentInput :: Maybe (Char, Classification)
     }
 
 
@@ -135,9 +134,7 @@ data Lexer =
 
 newtype LexerMonad a =
   LexerMonad {
-      lexerMonadAction :: StateT (LexerState, LexerTemporaryState)
-                                 (Pipe Char Char Token () IO)
-                                 a
+      lexerMonadAction :: StateT LexerState (Pipe Char Char Token () IO) a
     }
 
 
@@ -666,30 +663,43 @@ classify lexer character =
                                  Nothing -> UnknownClassification
 
 
-runLexer :: (MonadIO m) => Lexer -> Conduit Text m Token
+runLexer :: (MonadIO m) => Lexer -> Conduit ByteString m Token
 runLexer lexer = do
   let loopTexts :: (Monad m) => Conduit Text m Char
-      loopTexts = do
-        maybeText <- await
-        case maybeText of
-          Nothing -> return ()
-          Just text -> do
-            mapM_ yield $ T.unpack text
-            loopTexts
-      loopCharacters :: (MonadIO m) => Conduit Char m Token
+      loopTexts = C.mapM_ $ \text -> mapM_ yield $ T.unpack text
+      process :: (MonadIO m) => Conduit Char m Token
+      process = do
+        let initialPosition = Position {
+                                  positionOffset = 0,
+                                  positionByte = 0,
+                                  positionLine = 1,
+                                  positionColumn = 1
+                                }
+            state = LexerState {
+                        lexerStatePosition = initialPosition,
+                        lexerStatePreviousWasCarriageReturn = False,
+                        lexerStatePreviousEndedLine = False,
+                        lexerStateSavedPosition = Nothing,
+                        lexerStateAccumulator = T.empty,
+                        lexerStateData = TopLevelLexerStateData,
+                        lexerStateCurrentInput = Nothing
+                      }
+        _ <- runStateT state $ do
+          loopCharacters
+          -- TODO fire the appropriate end-of-input action
+        return ()
+      loopCharacters :: LexerMonad ()
       loopCharacters = do
         maybeCharacter <- await
         case maybeCharacter of
           Nothing -> return ()
           Just character -> do
-            yield $ Token {
-                        tokenSpan = Span {
-                                        spanStart = startPosition,
-                                        spanEnd = startPosition
-                                      }
-                      }
+            -- todo instead of this, fire the appropriate action
+            startToken
+            mapM_ (\_ -> consumeCharacter) [0 .. 79]
+            endToken TokenType
             loopCharacters
-  loopTexts =$= loopCharacters
+  C.decode C.utf8 $= loopTexts =$= process
 
 
 startPosition :: Position
@@ -708,7 +718,8 @@ initialLexerState =
       lexerStatePosition = startPosition,
       lexerStatePreviousWasCarriageReturn = False,
       lexerStateSavedPosition = Nothing,
-      lexerStateData = TopLevelLexerStateData
+      lexerStateData = TopLevelLexerStateData,
+      lexerStateCurrentInput = Nothing
     }
 
 
@@ -730,45 +741,32 @@ lexerAction lexer state maybeCharacter =
             Just action -> action
 
 
-getLexerState :: LexerMonad LexerState
-getLexerState = LexerMonad $ do
-  (state, _) <- get
-  return state
+startToken :: LexerMonad ()
+startToken = LexerMonad $ do
+  state <- get
+  let position = lexerStatePosition state
+  put $ state {
+            lexerStateSavedPosition = Just position
+          }
 
 
-putLexerState :: LexerState -> LexerMonad ()
-putLexerState state = LexerMonad $ do
-  (_, temporaryState) <- get
-  put (state, temporaryState)
-
-
-getLexerTemporaryState :: LexerMonad LexerTemporaryState
-getLexerTemporaryState = LexerMonad $ do
-  (_, temporaryState) <- get
-  return temporaryState
-
-
-putLexerTemporaryState :: LexerTemporaryState -> LexerMonad ()
-putLexerTemporaryState temporaryState = LexerMonad $ do
-  (state, _) <- get
-  put (state, temporaryState)
-
-
-initResult :: LexerMonad ()
-initResult = do
-  state <- getLexerState
+endToken :: TokenType -> LexerMonad ()
+endToken tokenType = LexerMonad $ do
+  state <- get
   case lexerStateSavedPosition state of
-    Just savedPosition -> do
-      putLexerState $ state -- { lexerStateSavedResult = Nothing }
-      -- yield savedResult
-      return ()
-    Nothing -> do
-      return ()
-      -- yield $ Token { tokenPosition = lexerStatePosition state }
-
-
-fillResult :: LexerMonad ()
-fillResult = undefined
+    Nothing -> return ()
+    Just startPosition -> do
+      let endPosition = lexerStatePosition state
+      put $ state {
+                lexerStateSavedPosition = Nothing
+              }
+      lift $ yield $ Token {
+                         tokenType = tokenType,
+                         tokenSpan = Span {
+                                         spanStart = startPosition,
+                                         spanEnd = startPosition
+                                       }
+                       }
 
 
 produceError :: Error -> LexerMonad ()
@@ -780,7 +778,59 @@ produceToken token = undefined
 
 
 consumeCharacter :: LexerMonad ()
-consumeCharacter = undefined
+consumeCharacter = LexerMonad $ do
+  oldState <- get
+  newCharacter <- await
+  let oldCharacter = lexerStateCharacter oldState
+      oldPosition = lexerStatePosition state
+      byteLength = BS.length $ T.encodeUtf8 $ T.singleton previousCharacter
+      previousWasCarriageReturn = lexerStatePreviousWasCarriageReturn oldState
+      previousEndedLine = lexerStatePreviousEndedLine oldState
+      (isCarriageReturn, endsLine, startsNewLine) =
+        case (previousWasCarriageReturn, previousEndedLine,  of
+      newLine = if startsNewLine
+                  then positionLine oldPosition + 1
+                  else positionLine oldPosition
+      newColumn = if startsNewLine
+                    then 1
+                    else positionColumn oldPosition + 1
+      newPosition = oldPosition {
+                        positionCharacter = positionCharacter oldPosition + 1,
+                        positionByte = positionByte oldPosition + byteLength,
+                        positionLine = newLine,
+                        positionColumn newColumn
+                      }
+      newAccumulator = T.snoc (lexerStateAccumulator oldState) oldCharacter
+      newInput = Just (newCharacter, newClassification)
+      newState = oldState {
+                     lexerStatePosition newPosition,
+                     lexerStatePreviousWasCarriageReturn :: Bool,
+                     lexerStatePreviousEndedLine :: Bool,
+                     lexerStateAccumulator = newAccumulator,
+                     lexerStateCurrentInput = newInput
+                   }
+        this._byte += Unicode.codepointByteCount(this._input[this._offset]);
+        
+        this._offset++;
+        
+        if(character == '\n') {
+            if(!this._previousWasCarriageReturn) {
+                this._line++;
+                this._column = 1;
+            }
+            this._previousWasCarriageReturn = false;
+        } else if(character == '\r') {
+            this._line++;
+            this._column = 1;
+            this._previousWasCarriageReturn = true;
+        } else if(classification == VerticalWhitespaceClassification) {
+            this._line++;
+            this._column = 1;
+            this._previousWasCarriageReturn = false;
+        } else {
+            this._column++;
+            this._previousWasCarriageReturn = false;
+        }
 
 
 pushStateData :: LexerStateData -> LexerMonad ()
@@ -1317,31 +1367,6 @@ lex: function() {
         result.string =
           Unicode.getString(this._input.slice
             (result.position.offset, this._offset));
-    }, this);
-    
-    var consumeCharacter = _.bind(function() {
-        this._byte += Unicode.codepointByteCount(this._input[this._offset]);
-        
-        this._offset++;
-        
-        if(character == '\n') {
-            if(!this._previousWasCarriageReturn) {
-                this._line++;
-                this._column = 1;
-            }
-            this._previousWasCarriageReturn = false;
-        } else if(character == '\r') {
-            this._line++;
-            this._column = 1;
-            this._previousWasCarriageReturn = true;
-        } else if(classification == VerticalWhitespaceClassification) {
-            this._line++;
-            this._column = 1;
-            this._previousWasCarriageReturn = false;
-        } else {
-            this._column++;
-            this._previousWasCarriageReturn = false;
-        }
     }, this);
     
     initResult();
