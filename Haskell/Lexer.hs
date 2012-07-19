@@ -49,7 +49,8 @@ data Token =
       tokenText :: Text
     }
 instance Show Token where
-  show token = "<token>"
+  show token = T.concat ["<token ", show $ tokenSpan token, " \"",
+                         tokenText token, "\">"]
 
 
 data Classification
@@ -120,7 +121,8 @@ data LexerState =
       lexerStateSavedPosition :: Maybe Position,
       lexerStateAccumulator :: Text,
       lexerStateData :: LexerStateData,
-      lexerStateInput :: Maybe (Char, Classification)
+      lexerStateInput :: Maybe (Char, Classification),
+      lexerStateDone :: Bool
     }
 
 
@@ -682,19 +684,26 @@ runLexer lexer = do
       process :: (MonadIO m) => Conduit Char m Token
       process = do
         _ <- flip runStateT (lexer, initialLexerState) $ lexerMonadAction $ do
+            consumeCharacter
             loopCharacters
-            -- TODO fire the appropriate end-of-input action
         return ()
       loopCharacters :: LexerMonad ()
       loopCharacters = do
-        maybeCharacter <- LexerMonad $ lift $ await
-        case maybeCharacter of
-          Nothing -> return ()
-          Just character -> do
-            -- todo instead of this, fire the appropriate action
-            startToken
-            mapM_ (\_ -> consumeCharacter) [0 .. 79]
-            endToken TokenType
+        (_, state) <- LexerMonad $ get
+        if lexerStateDone state
+          then return ()
+          else do
+            maybeInput <- getInput
+            case maybeInput of
+              Nothing -> do
+                -- TODO instead of this, fire the end-action
+                done
+                return ()
+              Just (character, classification) -> do
+                -- TODO instead of this, fire the appropriate action
+                startToken
+                mapM_ (\_ -> consumeCharacter) [0 .. 79]
+                endToken TokenType
             loopCharacters
   C.decode C.utf8 =$= loopTexts =$= process
 
@@ -717,7 +726,8 @@ initialLexerState =
       lexerStateSavedPosition = Nothing,
       lexerStateAccumulator = T.empty,
       lexerStateData = TopLevelLexerStateData,
-      lexerStateInput = Nothing
+      lexerStateInput = Nothing,
+      lexerStateDone = False
     }
 
 
@@ -737,6 +747,12 @@ lexerAction lexer state maybeCharacter =
                             actionMap) of
             Nothing -> lexerStateDataActionMapDefaultAction actionMap
             Just action -> action
+
+
+getInput :: LexerMonad (Maybe (Char, Classification))
+getInput = LexerMonad $ do
+  (_, state) <- get
+  return $ lexerStateInput state
 
 
 startToken :: LexerMonad ()
@@ -765,7 +781,7 @@ endToken tokenType = LexerMonad $ do
                          tokenType = tokenType,
                          tokenSpan = Span {
                                          spanStart = startPosition,
-                                         spanEnd = startPosition
+                                         spanEnd = endPosition
                                        },
                          tokenText = text
                        }
@@ -781,6 +797,10 @@ consumeCharacter = LexerMonad $ do
   maybeNewCharacter <- lift await
   let maybeOldInput = lexerStateInput oldState
       oldPosition = lexerStatePosition oldState
+      characterLength =
+        case maybeOldInput of
+          Nothing -> 0
+          Just _ -> 1
       byteLength =
         maybe 0 (\(oldCharacter, _) ->
                    BS.length $ T.encodeUtf8 $ T.singleton oldCharacter)
@@ -793,15 +813,17 @@ consumeCharacter = LexerMonad $ do
           (Just ('\n', _), _) -> True
           (Just (_, VerticalWhitespaceClassification), _) -> True
           _ -> False
+      newCharacterPosition = positionCharacter oldPosition + characterLength
+      newBytePosition = positionByte oldPosition + byteLength
       newLine = if previousEndedLine
                   then positionLine oldPosition + 1
                   else positionLine oldPosition
       newColumn = if previousEndedLine
                     then 1
-                    else positionColumn oldPosition + 1
+                    else positionColumn oldPosition + characterLength
       newPosition = oldPosition {
-                        positionCharacter = positionCharacter oldPosition + 1,
-                        positionByte = positionByte oldPosition + byteLength,
+                        positionCharacter = newCharacterPosition,
+                        positionByte = newBytePosition,
                         positionLine = newLine,
                         positionColumn = newColumn
                       }
@@ -828,6 +850,14 @@ pushStateData stateData = undefined
 
 dropStateData :: LexerMonad ()
 dropStateData = undefined
+
+
+done :: LexerMonad ()
+done = LexerMonad $ do
+  (lexer, state) <- get
+  put (lexer, state {
+                  lexerStateDone = True
+                })
 
 
 actionError :: LexerMonad ()
