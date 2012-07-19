@@ -1,4 +1,4 @@
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE OverloadedStrings, Rank2Types #-}
 module Lexer
   (Position(..),
    Span(..),
@@ -24,12 +24,17 @@ import Prelude hiding (Show(..))
 
 import Control.Monad.IO.Class
 import Control.Monad.State.Strict
+import Data.ByteString (ByteString)
+import qualified Data.ByteString as BS
 import Data.Conduit
+import qualified Data.Conduit.List as C
+import qualified Data.Conduit.Text as C
 import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Maybe
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Text.Encoding as T
 
 import Error
 import Knapp.Show
@@ -111,12 +116,11 @@ data LexerStateDataActionMap =
 data LexerState =
   LexerState {
       lexerStatePosition :: Position,
-      lexerStatePreviousWasCarriageReturn :: Bool,
       lexerStatePreviousEndedLine :: Bool,
       lexerStateSavedPosition :: Maybe Position,
       lexerStateAccumulator :: Text,
       lexerStateData :: LexerStateData,
-      lexerStateCurrentInput :: Maybe (Char, Classification)
+      lexerStateInput :: Maybe (Char, Classification)
     }
 
 
@@ -134,7 +138,9 @@ data Lexer =
 
 newtype LexerMonad a =
   LexerMonad {
-      lexerMonadAction :: StateT LexerState (Pipe Char Char Token () IO) a
+      lexerMonadAction
+        :: forall m . (MonadIO m)
+        => StateT (Lexer, LexerState) (Pipe Char Char Token () m) a
     }
 
 
@@ -663,34 +669,25 @@ classify lexer character =
                                  Nothing -> UnknownClassification
 
 
-runLexer :: (MonadIO m) => Lexer -> Conduit ByteString m Token
+runLexer :: (MonadIO m, MonadThrow m) => Lexer -> Conduit ByteString m Token
 runLexer lexer = do
   let loopTexts :: (Monad m) => Conduit Text m Char
-      loopTexts = C.mapM_ $ \text -> mapM_ yield $ T.unpack text
+      loopTexts = do
+        maybeText <- await
+        case maybeText of
+          Nothing -> return ()
+          Just text -> do
+            mapM_ yield $ T.unpack text
+            loopTexts
       process :: (MonadIO m) => Conduit Char m Token
       process = do
-        let initialPosition = Position {
-                                  positionOffset = 0,
-                                  positionByte = 0,
-                                  positionLine = 1,
-                                  positionColumn = 1
-                                }
-            state = LexerState {
-                        lexerStatePosition = initialPosition,
-                        lexerStatePreviousWasCarriageReturn = False,
-                        lexerStatePreviousEndedLine = False,
-                        lexerStateSavedPosition = Nothing,
-                        lexerStateAccumulator = T.empty,
-                        lexerStateData = TopLevelLexerStateData,
-                        lexerStateCurrentInput = Nothing
-                      }
-        _ <- runStateT state $ do
-          loopCharacters
-          -- TODO fire the appropriate end-of-input action
+        _ <- flip runStateT (lexer, initialLexerState) $ lexerMonadAction $ do
+            loopCharacters
+            -- TODO fire the appropriate end-of-input action
         return ()
       loopCharacters :: LexerMonad ()
       loopCharacters = do
-        maybeCharacter <- await
+        maybeCharacter <- LexerMonad $ lift $ await
         case maybeCharacter of
           Nothing -> return ()
           Just character -> do
@@ -699,13 +696,13 @@ runLexer lexer = do
             mapM_ (\_ -> consumeCharacter) [0 .. 79]
             endToken TokenType
             loopCharacters
-  C.decode C.utf8 $= loopTexts =$= process
+  C.decode C.utf8 =$= loopTexts =$= process
 
 
 startPosition :: Position
 startPosition =
   Position {
-      positionOffset = 0,
+      positionCharacter = 0,
       positionByte = 0,
       positionLine = 1,
       positionColumn = 1
@@ -716,10 +713,11 @@ initialLexerState :: LexerState
 initialLexerState =
   LexerState {
       lexerStatePosition = startPosition,
-      lexerStatePreviousWasCarriageReturn = False,
+      lexerStatePreviousEndedLine = False,
       lexerStateSavedPosition = Nothing,
+      lexerStateAccumulator = T.empty,
       lexerStateData = TopLevelLexerStateData,
-      lexerStateCurrentInput = Nothing
+      lexerStateInput = Nothing
     }
 
 
@@ -743,25 +741,26 @@ lexerAction lexer state maybeCharacter =
 
 startToken :: LexerMonad ()
 startToken = LexerMonad $ do
-  state <- get
+  (lexer, state) <- get
   let position = lexerStatePosition state
-  put $ state {
-            lexerStateSavedPosition = Just position
-          }
+  put (lexer, state {
+                  lexerStateSavedPosition = Just position,
+                  lexerStateAccumulator = T.empty
+                })
 
 
 endToken :: TokenType -> LexerMonad ()
 endToken tokenType = LexerMonad $ do
-  state <- get
+  (lexer, state) <- get
   case lexerStateSavedPosition state of
     Nothing -> return ()
     Just startPosition -> do
       let endPosition = lexerStatePosition state
           text = lexerStateAccumulator state
-      put $ state {
-                lexerStateSavedPosition = Nothing,
-                lexerStateAccumulator = Text.empty
-              }
+      put (lexer, state {
+                      lexerStateSavedPosition = Nothing,
+                      lexerStateAccumulator = T.empty
+                    })
       lift $ yield $ Token {
                          tokenType = tokenType,
                          tokenSpan = Span {
@@ -776,64 +775,51 @@ produceError :: Error -> LexerMonad ()
 produceError error = undefined
 
 
-produceToken :: Token -> LexerMonad ()
-produceToken token = undefined
-
-
 consumeCharacter :: LexerMonad ()
 consumeCharacter = LexerMonad $ do
-  oldState <- get
-  newCharacter <- await
-  let oldCharacter = lexerStateCharacter oldState
-      oldPosition = lexerStatePosition state
-      byteLength = BS.length $ T.encodeUtf8 $ T.singleton previousCharacter
-      previousWasCarriageReturn = lexerStatePreviousWasCarriageReturn oldState
+  (lexer, oldState) <- get
+  maybeNewCharacter <- lift await
+  let maybeOldInput = lexerStateInput oldState
+      oldPosition = lexerStatePosition oldState
+      byteLength =
+        maybe 0 (\(oldCharacter, _) ->
+                   BS.length $ T.encodeUtf8 $ T.singleton oldCharacter)
+              maybeOldInput
       previousEndedLine = lexerStatePreviousEndedLine oldState
-      (isCarriageReturn, endsLine, startsNewLine) =
-        case (previousWasCarriageReturn, previousEndedLine,  of
-      newLine = if startsNewLine
+      endsLine =
+        case (maybeOldInput, maybeNewCharacter) of
+          (Just ('\r', _), Just '\n') -> False
+          (Just ('\r', _), _) -> True
+          (Just ('\n', _), _) -> True
+          (Just (_, VerticalWhitespaceClassification), _) -> True
+          _ -> False
+      newLine = if previousEndedLine
                   then positionLine oldPosition + 1
                   else positionLine oldPosition
-      newColumn = if startsNewLine
+      newColumn = if previousEndedLine
                     then 1
                     else positionColumn oldPosition + 1
       newPosition = oldPosition {
                         positionCharacter = positionCharacter oldPosition + 1,
                         positionByte = positionByte oldPosition + byteLength,
                         positionLine = newLine,
-                        positionColumn newColumn
+                        positionColumn = newColumn
                       }
-      newAccumulator = T.snoc (lexerStateAccumulator oldState) oldCharacter
-      newInput = Just (newCharacter, newClassification)
+      newAccumulator =
+        case maybeOldInput of
+          Nothing -> lexerStateAccumulator oldState
+          Just (oldCharacter, _) ->
+            T.snoc (lexerStateAccumulator oldState) oldCharacter
+      newInput = fmap (\newCharacter ->
+                         (newCharacter, classify lexer newCharacter))
+                      maybeNewCharacter
       newState = oldState {
-                     lexerStatePosition newPosition,
-                     lexerStatePreviousWasCarriageReturn :: Bool,
-                     lexerStatePreviousEndedLine :: Bool,
+                     lexerStatePosition = newPosition,
+                     lexerStatePreviousEndedLine = endsLine,
                      lexerStateAccumulator = newAccumulator,
-                     lexerStateCurrentInput = newInput
+                     lexerStateInput = newInput
                    }
-        this._byte += Unicode.codepointByteCount(this._input[this._offset]);
-        
-        this._offset++;
-        
-        if(character == '\n') {
-            if(!this._previousWasCarriageReturn) {
-                this._line++;
-                this._column = 1;
-            }
-            this._previousWasCarriageReturn = false;
-        } else if(character == '\r') {
-            this._line++;
-            this._column = 1;
-            this._previousWasCarriageReturn = true;
-        } else if(classification == VerticalWhitespaceClassification) {
-            this._line++;
-            this._column = 1;
-            this._previousWasCarriageReturn = false;
-        } else {
-            this._column++;
-            this._previousWasCarriageReturn = false;
-        }
+  put (lexer, newState)
 
 
 pushStateData :: LexerStateData -> LexerMonad ()
