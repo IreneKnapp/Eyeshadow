@@ -142,7 +142,9 @@ newtype LexerMonad a =
   LexerMonad {
       lexerMonadAction
         :: forall m . (MonadIO m)
-        => StateT (Lexer, LexerState) (Pipe Char Char Token () m) a
+        => StateT (Lexer, LexerState)
+                  (Pipe Char Char (Either Error Token) () m)
+                  a
     }
 
 
@@ -671,7 +673,10 @@ classify lexer character =
                                  Nothing -> UnknownClassification
 
 
-runLexer :: (MonadIO m, MonadThrow m) => Lexer -> Conduit ByteString m Token
+runLexer
+  :: (MonadIO m, MonadThrow m)
+  => Lexer
+  -> Conduit ByteString m (Either Error Token)
 runLexer lexer = do
   let loopTexts :: (Monad m) => Conduit Text m Char
       loopTexts = do
@@ -681,7 +686,7 @@ runLexer lexer = do
           Just text -> do
             mapM_ yield $ T.unpack text
             loopTexts
-      process :: (MonadIO m) => Conduit Char m Token
+      process :: (MonadIO m) => Conduit Char m (Either Error Token)
       process = do
         _ <- flip runStateT (lexer, initialLexerState) $ lexerMonadAction $ do
             consumeCharacter
@@ -694,19 +699,6 @@ runLexer lexer = do
           then return ()
           else do
             lexerAction
-            {-
-            maybeInput <- getInput
-            case maybeInput of
-              Nothing -> do
-                -- TODO instead of this, fire the end-action
-                done
-                return ()
-              Just (character, classification) -> do
-                -- TODO instead of this, fire the appropriate action
-                startToken
-                mapM_ (\_ -> consumeCharacter) [0 .. 79]
-                endToken TokenType
-                -}
             loopCharacters
   C.decode C.utf8 =$= loopTexts =$= process
 
@@ -781,18 +773,19 @@ endToken tokenType = LexerMonad $ do
                       lexerStateSavedPosition = Nothing,
                       lexerStateAccumulator = T.empty
                     })
-      lift $ yield $ Token {
-                         tokenType = tokenType,
-                         tokenSpan = Span {
-                                         spanStart = startPosition,
-                                         spanEnd = endPosition
-                                       },
-                         tokenText = text
-                       }
+      lift $ yield $ Right $ Token {
+                                 tokenType = tokenType,
+                                 tokenSpan = Span {
+                                                 spanStart = startPosition,
+                                                 spanEnd = endPosition
+                                               },
+                                 tokenText = text
+                               }
 
 
 produceError :: Error -> LexerMonad ()
-produceError error = undefined
+produceError error = LexerMonad $ do
+  lift $ yield $ Left error
 
 
 consumeCharacter :: LexerMonad ()

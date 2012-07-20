@@ -7,6 +7,7 @@ module Error
 
 import Prelude hiding (Show(..))
 
+import Data.Text (Text)
 import qualified Data.Text as T
 
 import Knapp.Show
@@ -36,7 +37,9 @@ instance Show Span where
 
 data Error =
   Error {
-      errorMessage :: String,
+      errorMessage :: Text,
       errorSpan :: Span
     }
+instance Show Error where
+  show error = T.concat [show $ errorSpan error, "\n", errorMessage error]
 
