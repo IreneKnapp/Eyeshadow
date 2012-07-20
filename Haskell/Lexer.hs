@@ -693,6 +693,8 @@ runLexer lexer = do
         if lexerStateDone state
           then return ()
           else do
+            lexerAction
+            {-
             maybeInput <- getInput
             case maybeInput of
               Nothing -> do
@@ -704,6 +706,7 @@ runLexer lexer = do
                 startToken
                 mapM_ (\_ -> consumeCharacter) [0 .. 79]
                 endToken TokenType
+                -}
             loopCharacters
   C.decode C.utf8 =$= loopTexts =$= process
 
@@ -731,18 +734,19 @@ initialLexerState =
     }
 
 
-lexerAction :: Lexer -> LexerState -> Maybe Char -> LexerMonad ()
-lexerAction lexer state maybeCharacter =
+lexerAction :: LexerMonad ()
+lexerAction = do
+  (lexer, state) <- LexerMonad $ get
   case Map.lookup (lexerStateData state) (lexerActionMap lexer) of
-    Nothing -> actionError
+    Nothing -> done
     Just actionMap ->
-      case maybeCharacter of
+      case lexerStateInput state of
         Nothing ->
           case lexerStateDataActionMapEndAction actionMap of
             Nothing -> lexerStateDataActionMapDefaultAction actionMap
             Just action -> action
-        Just character ->
-          case Map.lookup (classify lexer character)
+        Just (character, classification) ->
+          case Map.lookup classification
                           (lexerStateDataActionMapClassificationActionMap
                             actionMap) of
             Nothing -> lexerStateDataActionMapDefaultAction actionMap
