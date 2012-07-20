@@ -41,7 +41,14 @@ import Knapp.Show
 import Unicode
 
 
-data TokenType = TokenType
+data TokenType
+  = WordTokenType
+  | NumberTokenType
+  | OperatorTokenType
+  | PeriodTokenType
+  | EllipsisTokenType
+  | SpaceTokenType
+  | ParagraphBreakTokenType
 data Token =
   Token {
       tokenType :: TokenType,
@@ -471,7 +478,7 @@ defaultActionMap =
                (ColonClassification, actionWordToColon),
                (SemicolonClassification, actionWordToSemicolon)],
           lexerStateDataActionMapEndAction = Nothing,
-          lexerStateDataActionMapDefaultAction = actionFinish
+          lexerStateDataActionMapDefaultAction = actionFinishWord
         }),
      (NumberLexerStateData,
       LexerStateDataActionMap {
@@ -479,7 +486,7 @@ defaultActionMap =
             Map.fromList
               [(PeriodClassification, actionContinue)],
           lexerStateDataActionMapEndAction = Nothing,
-          lexerStateDataActionMapDefaultAction = actionFinish
+          lexerStateDataActionMapDefaultAction = actionFinishNumber
         }),
      (OperatorLexerStateData,
       LexerStateDataActionMap {
@@ -490,7 +497,7 @@ defaultActionMap =
                (MinusClassification, actionContinue),
                (AtSignClassification, actionContinue)],
           lexerStateDataActionMapEndAction = Nothing,
-          lexerStateDataActionMapDefaultAction = actionFinish
+          lexerStateDataActionMapDefaultAction = actionFinishOperator
         }),
      (PeriodLexerStateData,
       LexerStateDataActionMap {
@@ -511,7 +518,7 @@ defaultActionMap =
                (OperatorClassification, actionPlusToOperator),
                (AtSignClassification, actionPlusToOperator)],
           lexerStateDataActionMapEndAction = Nothing,
-          lexerStateDataActionMapDefaultAction = actionFinish
+          lexerStateDataActionMapDefaultAction = actionFinishPlus
         }),
      (MinusLexerStateData,
       LexerStateDataActionMap {
@@ -533,7 +540,7 @@ defaultActionMap =
               [(MinusClassification, actionContinue),
                (ConnectingPunctuationClassification, actionContinue)],
           lexerStateDataActionMapEndAction = Nothing,
-          lexerStateDataActionMapDefaultAction = actionFinish
+          lexerStateDataActionMapDefaultAction = actionFinishHyphen
         }),
      (DashLexerStateData,
       LexerStateDataActionMap {
@@ -542,7 +549,7 @@ defaultActionMap =
               [(MinusClassification, actionContinue),
                (ConnectingPunctuationClassification, actionContinue)],
           lexerStateDataActionMapEndAction = Nothing,
-          lexerStateDataActionMapDefaultAction = actionFinish
+          lexerStateDataActionMapDefaultAction = actionFinishDash
         }),
      (StringLexerStateData,
       LexerStateDataActionMap {
@@ -551,8 +558,7 @@ defaultActionMap =
               [(QuoteClassification, actionMaybeFinishString),
                (BackslashClassification, actionPushEscapeSequence)],
           lexerStateDataActionMapEndAction = Just actionUnexpectedEndInString,
-          lexerStateDataActionMapDefaultAction =
-            actionContinueAndAccumulateCharacter
+          lexerStateDataActionMapDefaultAction = actionContinue
         }),
      (EscapeSequenceLexerStateData,
       LexerStateDataActionMap {
@@ -564,7 +570,7 @@ defaultActionMap =
       LexerStateDataActionMap {
           lexerStateDataActionMapClassificationActionMap = Map.empty,
           lexerStateDataActionMapEndAction = Nothing,
-          lexerStateDataActionMapDefaultAction = actionFinish
+          lexerStateDataActionMapDefaultAction = actionFinishOpenParenthesis
         }),
      (CloseParenthesisLexerStateData,
       LexerStateDataActionMap {
@@ -572,7 +578,7 @@ defaultActionMap =
             Map.fromList
               [(MinusClassification, actionParenthesisToHyphen)],
           lexerStateDataActionMapEndAction = Nothing,
-          lexerStateDataActionMapDefaultAction = actionFinish
+          lexerStateDataActionMapDefaultAction = actionFinishCloseParenthesis
         }),
      (PreCommaLexerStateData,
       LexerStateDataActionMap {
@@ -586,7 +592,7 @@ defaultActionMap =
       LexerStateDataActionMap {
           lexerStateDataActionMapClassificationActionMap = Map.empty,
           lexerStateDataActionMapEndAction = Nothing,
-          lexerStateDataActionMapDefaultAction = actionFinish
+          lexerStateDataActionMapDefaultAction = actionFinishComma
         }),
      (PreColonLexerStateData,
       LexerStateDataActionMap {
@@ -600,7 +606,7 @@ defaultActionMap =
       LexerStateDataActionMap {
           lexerStateDataActionMapClassificationActionMap = Map.empty,
           lexerStateDataActionMapEndAction = Nothing,
-          lexerStateDataActionMapDefaultAction = actionFinish
+          lexerStateDataActionMapDefaultAction = actionFinishColon
         }),
      (PreSemicolonLexerStateData,
       LexerStateDataActionMap {
@@ -614,7 +620,7 @@ defaultActionMap =
       LexerStateDataActionMap {
           lexerStateDataActionMapClassificationActionMap = Map.empty,
           lexerStateDataActionMapEndAction = Nothing,
-          lexerStateDataActionMapDefaultAction = actionFinish
+          lexerStateDataActionMapDefaultAction = actionFinishSemicolon
         }),
      (SpliceLexerStateData,
       LexerStateDataActionMap {
@@ -622,13 +628,13 @@ defaultActionMap =
             Map.fromList
               [(AtSignClassification, actionStartListSplice)],
           lexerStateDataActionMapEndAction = Nothing,
-          lexerStateDataActionMapDefaultAction = actionFinish
+          lexerStateDataActionMapDefaultAction = actionFinishSplice
         }),
      (ListSpliceLexerStateData,
       LexerStateDataActionMap {
           lexerStateDataActionMapClassificationActionMap = Map.empty,
           lexerStateDataActionMapEndAction = Nothing,
-          lexerStateDataActionMapDefaultAction = actionFinish
+          lexerStateDataActionMapDefaultAction = actionFinishListSplice
         }),
      (WhitespaceLexerStateData,
       LexerStateDataActionMap {
@@ -698,6 +704,8 @@ runLexer lexer = do
         if lexerStateDone state
           then return ()
           else do
+            LexerMonad $ liftIO $ do
+              putStr $ maybe "(null)" (T.unpack . show . fst) $ lexerStateInput state
             lexerAction
             loopCharacters
   C.decode C.utf8 =$= loopTexts =$= process
@@ -743,12 +751,6 @@ lexerAction = do
                             actionMap) of
             Nothing -> lexerStateDataActionMapDefaultAction actionMap
             Just action -> action
-
-
-getInput :: LexerMonad (Maybe (Char, Classification))
-getInput = LexerMonad $ do
-  (_, state) <- get
-  return $ lexerStateInput state
 
 
 startToken :: LexerMonad ()
@@ -841,12 +843,36 @@ consumeCharacter = LexerMonad $ do
   put (lexer, newState)
 
 
-pushStateData :: LexerStateData -> LexerMonad ()
-pushStateData stateData = undefined
+setStateData :: LexerStateData -> LexerMonad ()
+setStateData stateData = LexerMonad $ do
+  (lexer, state) <- get
+  put (lexer, state {
+                  lexerStateData = stateData
+                })
 
 
-dropStateData :: LexerMonad ()
-dropStateData = undefined
+getInput :: LexerMonad (Maybe (Char, Classification))
+getInput = LexerMonad $ do
+  (_, state) <- get
+  return $ lexerStateInput state
+
+
+getAccumulator :: LexerMonad Text
+getAccumulator = LexerMonad $ do
+  (_, state) <- get
+  return $ lexerStateAccumulator state
+
+
+getSavedPosition :: LexerMonad (Maybe Position)
+getSavedPosition = LexerMonad $ do
+  (_, state) <- get
+  return $ lexerStateSavedPosition state
+
+
+getPosition :: LexerMonad Position
+getPosition = LexerMonad $ do
+  (_, state) <- get
+  return $ lexerStatePosition state
 
 
 done :: LexerMonad ()
@@ -874,36 +900,19 @@ actionError = undefined
 
 
 actionEnd :: LexerMonad ()
-actionEnd = undefined
-{-
-            -- TODO
--}
+actionEnd = do
+  done
 
 
 actionContinue :: LexerMonad ()
-actionContinue = undefined
-{-
-            consumeCharacter();
--}
-
-
-actionFinish :: LexerMonad ()
-actionFinish = undefined
-{-
-            fillResult();
-            result.type = state;
-            
-            this._stateStack.pop();
-            return result;
--}
+actionContinue = do
+  consumeCharacter
 
 
 actionStartWord :: LexerMonad ()
-actionStartWord = undefined
-{-
-            this._stateStack.push('word');
-            consumeCharacter();
--}
+actionStartWord = do
+  startToken
+  consumeCharacter
 
 
 actionWordToHyphen :: LexerMonad ()
@@ -954,12 +963,66 @@ actionWordToSemicolon = undefined
 -}
 
 
-actionStartNumber :: LexerMonad ()
-actionStartNumber = undefined
+actionFinishWord :: LexerMonad ()
+actionFinishWord = do
+  endToken WordTokenType
+  setStateData TopLevelLexerStateData
+
+
+actionFinishHyphen :: LexerMonad ()
+actionFinishHyphen = undefined
 {-
-            this._stateStack.push('number');
-            consumeCharacter();
+            fillResult();
+            result.type = state;
+            
+            this._stateStack.pop();
+            return result;
 -}
+
+
+actionFinishComma :: LexerMonad ()
+actionFinishComma = undefined
+{-
+            fillResult();
+            result.type = state;
+            
+            this._stateStack.pop();
+            return result;
+-}
+
+
+actionFinishColon :: LexerMonad ()
+actionFinishColon = undefined
+{-
+            fillResult();
+            result.type = state;
+            
+            this._stateStack.pop();
+            return result;
+-}
+
+
+actionFinishSemicolon :: LexerMonad ()
+actionFinishSemicolon = undefined
+{-
+            fillResult();
+            result.type = state;
+            
+            this._stateStack.pop();
+            return result;
+-}
+
+
+actionStartNumber :: LexerMonad ()
+actionStartNumber = do
+  setStateData NumberLexerStateData
+  consumeCharacter
+
+
+actionFinishNumber :: LexerMonad ()
+actionFinishNumber = do
+  endToken NumberTokenType
+  setStateData TopLevelLexerStateData
 
 
 actionStartOperator :: LexerMonad ()
@@ -967,6 +1030,17 @@ actionStartOperator = undefined
 {-
             this._stateStack.push('operator');
             consumeCharacter();
+-}
+
+
+actionFinishOperator :: LexerMonad ()
+actionFinishOperator = undefined
+{-
+            fillResult();
+            result.type = state;
+            
+            this._stateStack.pop();
+            return result;
 -}
 
 
@@ -978,12 +1052,34 @@ actionStartSplice = undefined
 -}
 
 
+actionFinishSplice :: LexerMonad ()
+actionFinishSplice = undefined
+{-
+            fillResult();
+            result.type = state;
+            
+            this._stateStack.pop();
+            return result;
+-}
+
+
 actionStartListSplice :: LexerMonad ()
 actionStartListSplice = undefined
 {-
             this._stateStack.pop();
             this._stateStack.push('list-splice');
             consumeCharacter();
+-}
+
+
+actionFinishListSplice :: LexerMonad ()
+actionFinishListSplice = undefined
+{-
+            fillResult();
+            result.type = state;
+            
+            this._stateStack.pop();
+            return result;
 -}
 
 
@@ -1062,6 +1158,17 @@ actionPlusToOperator = undefined
 -}
 
 
+actionFinishPlus :: LexerMonad ()
+actionFinishPlus = undefined
+{-
+            fillResult();
+            result.type = state;
+            
+            this._stateStack.pop();
+            return result;
+-}
+
+
 actionStartMinus :: LexerMonad ()
 actionStartMinus = undefined
 {-
@@ -1114,22 +1221,24 @@ actionStartDash = undefined
 -}
 
 
+actionFinishDash :: LexerMonad ()
+actionFinishDash = undefined
+{-
+            fillResult();
+            result.type = state;
+            
+            this._stateStack.pop();
+            return result;
+-}
+
+
 actionStartString :: LexerMonad ()
 actionStartString = undefined
-{-
-            result.value = '';
-            
-            this._stateStack.push('string');
-            consumeCharacter();
--}
-
-
-actionContinueAndAccumulateCharacter :: LexerMonad ()
-actionContinueAndAccumulateCharacter = undefined
-{-
-            result.value += character;
-            consumeCharacter();
--}
+  {- ...
+  startRecordingValue
+  setStateData StringLexerStateData
+  consumeCharacter
+  -}
 
 
 actionUnexpectedEndInString :: LexerMonad ()
@@ -1257,11 +1366,33 @@ actionStartOpenParenthesis = undefined
 -}
 
 
+actionFinishOpenParenthesis :: LexerMonad ()
+actionFinishOpenParenthesis = undefined
+{-
+            fillResult();
+            result.type = state;
+            
+            this._stateStack.pop();
+            return result;
+-}
+
+
 actionStartCloseParenthesis :: LexerMonad ()
 actionStartCloseParenthesis= undefined
 {-
             this._stateStack.push(CloseParenthesisClassification);
             consumeCharacter();
+-}
+
+
+actionFinishCloseParenthesis :: LexerMonad ()
+actionFinishCloseParenthesis = undefined
+{-
+            fillResult();
+            result.type = state;
+            
+            this._stateStack.pop();
+            return result;
 -}
 
 
@@ -1278,11 +1409,9 @@ actionParenthesisToHyphen = undefined
 
 
 actionStartPeriod :: LexerMonad ()
-actionStartPeriod = undefined
-{-
-            this._stateStack.push(PeriodClassification);
-            consumeCharacter();
--}
+actionStartPeriod = do
+  setStateData PeriodLexerStateData
+  consumeCharacter
 
 
 actionPeriodToNumber :: LexerMonad ()
@@ -1293,135 +1422,40 @@ actionPeriodToNumber = undefined
 
 
 actionFinishPeriod :: LexerMonad ()
-actionFinishPeriod = undefined
-{-
-            fillResult();
-            
-            if(result.string == '.') result.type = PeriodClassification;
-            else if(result.string == '..') result.type = 'operator';
-            else if(result.string == '...') result.type = 'ellipsis';
-            else {
-                result.type = 'error';
-                result.message = 'Too many consecutive periods.';
-            }
-            
-            this._stateStack.pop();
-            return result;
--}
+actionFinishPeriod = do
+  string <- getAccumulator
+  fromMaybe (do
+               endPosition <- getPosition
+               startPosition <-
+                 getSavedPosition >>= return . fromMaybe endPosition
+               let error = Error {
+                               errorMessage = "Too many consecutive periods.",
+                               errorSpan = Span {
+                                               spanStart = startPosition,
+                                               spanEnd = endPosition
+                                             }
+                             }
+               produceError error)
+            $ lookup string
+                     [(".", endToken PeriodTokenType),
+                      ("..", endToken OperatorTokenType),
+                      ("...", endToken EllipsisTokenType)]
+  setStateData TopLevelLexerStateData
 
 
 actionStartWhitespace :: LexerMonad ()
-actionStartWhitespace = undefined
-{-
-            this._stateStack.push('whitespace');
-            consumeCharacter();
--}
+actionStartWhitespace = do
+  setStateData WhitespaceLexerStateData
+  consumeCharacter
 
 
 actionFinishWhitespace :: LexerMonad ()
-actionFinishWhitespace = undefined
-{-
-            fillResult();
-            
-            var codepoints =
-              this._input.slice
-                (result.position.offset,
-                 result.position.offset + result.position.length);
-            
-            var newlineCount = 0;
-            var previousWasCarriageReturn = false;
-            for(var i = 0; i < codepoints.length; i++) {
-                var codepoint = codepoints[i];
-                var character = codepoint.toString();
-                var classification = this.classifyCodepoint(codepoint);
-                
-                if(character == '\n') {
-                    if(!previousWasCarriageReturn) newlineCount++;
-                    previousWasCarriageReturn = false;
-                } else if(character == '\r') {
-                    newlineCount++;
-                    previousWasCarriageReturn = true;
-                } else if(classification == VerticalWhitespaceClassification) {
-                    newlineCount++;
-                    previousWasCarriageReturn = false;
-                } else {
-                    previousWasCarriageReturn = false;
-                }
-            }
-            
-            if(newlineCount > 1) result.type = 'paragraph-break';
-            else result.type = 'space';
-            
-            this._stateStack.pop();
-            return result;
--}
+actionFinishWhitespace = do
+  setStateData TopLevelLexerStateData
+  endPosition <- getPosition
+  startPosition <- getSavedPosition >>= return . fromMaybe endPosition
+  let lineCount = positionLine endPosition - positionLine startPosition
+  if lineCount > 1
+    then endToken ParagraphBreakTokenType
+    else endToken SpaceTokenType
 
-
-{-
-
-lex: function() {
-    var result, escapeSequence, codepoint, character, classification;
-    
-    var initResult = _.bind(function() {
-        if(this._savedResult) {
-            result = this._savedResult;
-            this._savedResult = null;
-        } else {
-            result = {
-            position: {
-            offset: this._offset,
-            byte: this._byte,
-            line: this._line,
-            column: this._column,
-            },
-            };
-        }
-    }, this);
-    
-    var fillResult = _.bind(function() {
-        result.position.length = this._offset - result.position.offset;
-        result.string =
-          Unicode.getString(this._input.slice
-            (result.position.offset, this._offset));
-    }, this);
-    
-    initResult();
-    
-    if(this._offset >= this._input.length) {
-        fillResult();
-        result.type = 'end';
-        return result;
-    }
-    
-    while(true) {
-        if(this._offset < this._input.length) {
-            codepoint = this._input[this._offset];
-            character = codepoint.toString();
-            classification = this.classifyCodepoint(codepoint);
-        } else {
-            codepoint = null;
-            character = null;
-            classification = 'end';
-        }
-        
-        var state = _.last(this._stateStack) || TopLevelLexerStateData;
-        
-        var action;
-        -- Decode the action map
-        
-        
-        /*
-        console.log('[' + _.reduce(this._stateStack, function(soFar, item) {
-            if(soFar != '') soFar += ' ';
-            return soFar + item;
-        }, '') + '] '
-        + (character ? Unicode.showCharacter(character) : '(null)')
-        + ' ' + action);
-        */
-    }
-},
-});
-
-
-module.exports = Lexer;
--}
