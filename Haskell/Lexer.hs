@@ -42,8 +42,6 @@ import Error
 import Knapp.Show
 import Unicode
 
-import Debug.Trace
-
 
 data TokenType
   = WordTokenType
@@ -76,7 +74,7 @@ data Token =
     }
 instance Show Token where
   show token = T.concat ["<token ", show $ tokenSpan token, " \"",
-                         tokenText token, "\">"]
+                         tokenText token, "\">\n"]
 
 
 data Classification
@@ -692,8 +690,6 @@ runLexer lexer = do
         if lexerStateDone state
           then return ()
           else do
-            LexerMonad $ liftIO $ do
-              putStr $ maybe "(null)" ((\c -> [c]) . fst) $ lexerStateInput state
             lexerAction
             loopCharacters
   C.decode C.utf8 =$= loopTexts =$= process
@@ -1227,7 +1223,6 @@ actionEscapeSequence = do
   startPosition <- getPosition
   consumeCharacter
   maybeInput <- getInput
-  traceShow (fmap fst maybeInput) $ return ()
   case maybeInput of
     Nothing -> actionUnexpectedEndInString
     Just (character, _) ->
