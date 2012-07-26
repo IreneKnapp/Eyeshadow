@@ -15,6 +15,7 @@ import System.IO hiding (utf8)
 import Knapp.Conduit
 import Knapp.Show
 import Lexer
+import Parser
 
 
 main :: IO ()
@@ -25,6 +26,7 @@ main = do
       _ <- runResourceT
         $ sourceFile sourceFilePath
         $= runLexer defaultLexer
+        $= sideStream runParser
         $$ split (do
                     liftIO $ putStrLn $ "Errors"
                     C.map show =$ encode utf8 =$ sinkHandle stdout)

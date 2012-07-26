@@ -1,3 +1,26 @@
+module Parser
+  (runParser)
+  where
+
+import Data.Conduit
+
+import Error
+import Token
+
+
+runParser :: (Monad m) => Conduit Token m (Either Error Token)
+runParser = do
+  let loop = do
+        maybeToken <- await
+        case maybeToken of
+          Nothing -> return ()
+          Just token -> do
+            yield $ Right token
+            loop
+  loop
+
+
+{-
 var _ = require('underscore')._;
 var KnappObject = require('./knapp-object');
 
@@ -1398,3 +1421,4 @@ _parseSentence: function(body) {
 });
 
 module.exports = Parser;
+-}

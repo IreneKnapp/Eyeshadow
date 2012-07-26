@@ -1,9 +1,6 @@
 {-# LANGUAGE OverloadedStrings, Rank2Types #-}
 module Lexer
-  (Position(..),
-   Span(..),
-   Token(..),
-   Classification(..),
+  (Classification(..),
    LexerStateData(..),
    LexerStateDataActionMap(..),
    LexerState,
@@ -40,41 +37,8 @@ import qualified Data.Text.Encoding as T
 
 import Error
 import Knapp.Show
+import Token
 import Unicode
-
-
-data TokenType
-  = WordTokenType
-  | NumberTokenType
-  | StringTokenType
-  | OperatorTokenType
-  | PeriodTokenType
-  | EllipsisTokenType
-  | HyphenTokenType
-  | DashTokenType
-  | CommaTokenType
-  | ColonTokenType
-  | SemicolonTokenType
-  | TickTokenType
-  | BacktickTokenType
-  | SpliceTokenType
-  | ListSpliceTokenType
-  | OpenParenthesisTokenType
-  | CloseParenthesisTokenType
-  | SpaceTokenType
-  | ParagraphBreakTokenType
-data Token =
-  Token {
-      tokenType :: TokenType,
-      tokenSpan :: Span,
-      tokenText :: Text,
-      tokenValue :: Maybe Text,
-      tokenOpenDelimiter :: Maybe Char,
-      tokenCloseDelimiter :: Maybe Char
-    }
-instance Show Token where
-  show token = T.concat ["<token ", show $ tokenSpan token, " \"",
-                         tokenText token, "\">\n"]
 
 
 data Classification

@@ -1,4 +1,4 @@
-module Knapp.Conduit (split, toLeft, toRight) where
+module Knapp.Conduit (split, toLeft, toRight, sideStream) where
 
 import Control.Monad
 import Control.Monad.Trans
@@ -64,3 +64,19 @@ toRight =
         p' (Right b) = go final (p b)
 
         c' () = go final $ c ()
+
+
+sideStream
+  :: Monad m
+  => Conduit b m (Either a b')
+  -> Conduit (Either a b) m (Either a b')
+sideStream = go (return ())
+  where go final (PipeM mp) = PipeM (liftM (go final) mp)
+        go final (Leftover p b) = Leftover (go final p) (Right b)
+        go _ (Done ()) = Done ()
+        go _ (HaveOutput p final r) = HaveOutput (go final p) final r
+        go final right@(NeedInput p c) = NeedInput p' c'
+          where p' (Left a) = HaveOutput (go final right) final (Left a)
+                p' (Right b) = go final (p b)
+                c' () = go final (c ())
+
