@@ -33,6 +33,8 @@ data TokenType
   | CloseParenthesisTokenType
   | SpaceTokenType
   | ParagraphBreakTokenType
+
+
 data Token =
   Token {
       tokenType :: TokenType,

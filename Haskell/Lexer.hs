@@ -101,7 +101,6 @@ data LexerStateDataActionMap =
 data LexerState =
   LexerState {
       lexerStatePosition :: Position,
-      lexerStatePreviousEndedLine :: Bool,
       lexerStateSavedPosition :: Maybe Position,
       lexerStateAccumulator :: Text,
       lexerStateValue :: Maybe Text,
@@ -659,10 +658,10 @@ runLexer lexer = do
   C.decode C.utf8 =$= loopTexts =$= process
 
 
-startPosition :: Position
-startPosition =
+initialPosition :: Position
+initialPosition =
   Position {
-      positionCharacter = 0,
+      positionCharacter = 1,
       positionByte = 0,
       positionLine = 1,
       positionColumn = 1
@@ -672,8 +671,7 @@ startPosition =
 initialLexerState :: LexerState
 initialLexerState =
   LexerState {
-      lexerStatePosition = startPosition,
-      lexerStatePreviousEndedLine = False,
+      lexerStatePosition = initialPosition,
       lexerStateSavedPosition = Nothing,
       lexerStateAccumulator = T.empty,
       lexerStateValue = Nothing,
@@ -767,7 +765,6 @@ consumeCharacter = LexerMonad $ do
         maybe 0 (\(oldCharacter, _) ->
                    BS.length $ T.encodeUtf8 $ T.singleton oldCharacter)
               maybeOldInput
-      previousEndedLine = lexerStatePreviousEndedLine oldState
       endsLine =
         case (maybeOldInput, maybeNewCharacter) of
           (Just ('\r', _), Just '\n') -> False
@@ -777,10 +774,10 @@ consumeCharacter = LexerMonad $ do
           _ -> False
       newCharacterPosition = positionCharacter oldPosition + characterLength
       newBytePosition = positionByte oldPosition + byteLength
-      newLine = if previousEndedLine
+      newLine = if endsLine
                   then positionLine oldPosition + 1
                   else positionLine oldPosition
-      newColumn = if previousEndedLine
+      newColumn = if endsLine
                     then 1
                     else positionColumn oldPosition + characterLength
       newPosition = oldPosition {
@@ -799,7 +796,6 @@ consumeCharacter = LexerMonad $ do
                       maybeNewCharacter
       newState = oldState {
                      lexerStatePosition = newPosition,
-                     lexerStatePreviousEndedLine = endsLine,
                      lexerStateAccumulator = newAccumulator,
                      lexerStateInput = newInput
                    }
@@ -1330,17 +1326,18 @@ actionFinishPeriod = do
 
 actionStartWhitespace :: LexerMonad ()
 actionStartWhitespace = do
+  startToken
   setStateData WhitespaceLexerStateData
   consumeCharacter
 
 
 actionFinishWhitespace :: LexerMonad ()
 actionFinishWhitespace = do
-  setStateData TopLevelLexerStateData
   endPosition <- getPosition
   startPosition <- getSavedPosition >>= return . fromMaybe endPosition
   let lineCount = positionLine endPosition - positionLine startPosition
   if lineCount > 1
     then endToken ParagraphBreakTokenType
     else endToken SpaceTokenType
+  setStateData TopLevelLexerStateData
 

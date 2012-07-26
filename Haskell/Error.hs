@@ -21,8 +21,9 @@ data Position =
       positionColumn :: Int
     }
 instance Show Position where
-  show position = T.concat ["line ", show $ positionLine position, ", ",
-                            "column ", show $ positionColumn position]
+  show position = T.concat [show $ positionLine position, ":",
+                            show $ positionColumn position,
+                            "(", show $ positionCharacter position, ")"]
 
 
 data Span =
@@ -31,8 +32,7 @@ data Span =
       spanEnd :: Position
     }
 instance Show Span where
-  show span = T.concat [show $ spanStart span,
-                        " through ", show $ spanEnd span]
+  show span = T.concat [show $ spanStart span, "-", show $ spanEnd span]
 
 
 data Error =
