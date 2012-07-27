@@ -2,10 +2,126 @@ module Parser
   (runParser)
   where
 
+import Prelude hiding (Show(..))
+
+import Data.Array.Unboxed
 import Data.Conduit
+import Data.Dynamic
+import Data.Function
+import Data.List
+import Data.Map (Map)
+import qualified Data.Map as Map
+import Data.Set (Set)
+import qualified Data.Set as Set
+import Data.Text (Text)
+import qualified Data.Text as Text
+import Data.Word
 
 import Error
 import Token
+
+
+data GrammarSpecification =
+  GrammarSpecification {
+      grammarSpecificationTokenInterpretations :: Token -> Set Text,
+      grammarSpecificationTerminals :: Set Text,
+      grammarSpecificationStartSymbols :: Set Text,
+      grammarSpecificationProductions :: Map Text (Set ProductionSpecification)
+    }
+
+
+data ProductionSpecification =
+  ProductionSpecification {
+      productionSpecificationRightHandSide :: [Text],
+      productionSpecificationReducer :: Dynamic
+    }
+
+
+data GrammarSymbol = GrammarSymbol Text
+instance Eq GrammarSymbol where
+  (==) (GrammarSymbol a) (GrammarSymbol b) = (==) a b
+instance Ord GrammarSymbol where
+  compare (GrammarSymbol a) (GrammarSymbol b) = compare a b
+
+
+data Production =
+  Production {
+      productionLeftHandSide :: GrammarSymbol,
+      productionRightHandSide :: [GrammarSymbol],
+      productionReducer :: Dynamic
+    }
+instance Eq Production where
+  (==) a b =
+    case on (==) productionLeftHandSide a b of
+      True -> on (==) productionRightHandSide a b
+      False -> False
+instance Ord Production where
+  compare a b =
+    case on compare productionLeftHandSide a b of
+      EQ -> on compare productionRightHandSide a b
+      result -> result
+
+
+data Item =
+  Item {
+      itemProduction :: Production,
+      itemIndex :: Int
+    }
+instance Eq Item where
+  (==) a b =
+    case on (==) itemProduction a b of
+      True -> on (==) itemIndex a b
+      False -> False
+instance Ord Item where
+  compare a b =
+    case on compare itemProduction a b of
+      EQ -> on compare itemIndex a b
+      result -> result
+
+
+data GrammarState =
+  GrammarState {
+      grammarStateItems :: Set Item,
+      grammarStateGotoMap :: Map GrammarSymbol GrammarState,
+      grammarStateShiftMap :: Map GrammarSymbol GrammarState,
+      grammarStateReductions :: Set Production
+    }
+
+
+data Grammar =
+  Grammar {
+      grammarStateTerminals :: Set GrammarSymbol,
+      grammarStateNonterminals :: Set GrammarSymbol,
+      grammarTokenInterpretations :: Token -> Set GrammarSymbol,
+      grammarStateProductions :: Set Production,
+      grammarStates :: Set GrammarState,
+      grammarInitialStateMap :: Map Text GrammarState
+    }
+
+
+data CompiledGrammar =
+  CompiledGrammar {
+      compiledGrammarTokenInterpretations :: Token -> Set Word,
+      compiledGrammarInitialStateMap :: Map Text Word,
+      compiledGrammarGotoTable :: UArray (Word, Word) Word,
+      compiledGrammarShiftTable :: UArray (Word, Word) Word,
+      compiledGrammarReductionTable :: UArray (Word, Word) Word,
+      compiledGrammarProductionRightHandSideLengths :: UArray Word Word,
+      compiledGrammarReducers :: Array Word Dynamic,
+      compiledGrammarOriginal :: Grammar,
+      compiledGrammarOriginalSymbolMap :: Map Word GrammarSymbol,
+      compiledGrammarOriginalProductionMap :: Map Word Production,
+      compiledGrammarOriginalStateMap :: Map Word GrammarState
+    }
+
+
+makeGrammar :: GrammarSpecification -> Maybe Grammar
+makeGrammar grammarSpecification = do
+  Nothing
+
+
+compileGrammar :: Grammar -> CompiledGrammar
+compileGrammar grammar = undefined
 
 
 runParser :: (Monad m) => Conduit Token m (Either Error Token)
