@@ -1,4 +1,4 @@
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE OverloadedStrings, DeriveDataTypeable #-}
 module Token
   (TokenType(..),
    Token(..))
@@ -8,6 +8,7 @@ import Prelude hiding (Show(..))
 
 import Data.Text (Text)
 import qualified Data.Text as T
+import Data.Typeable
 
 import Error
 import Knapp.Show
@@ -33,6 +34,7 @@ data TokenType
   | CloseParenthesisTokenType
   | SpaceTokenType
   | ParagraphBreakTokenType
+  deriving (Eq)
 
 
 data Token =
@@ -44,6 +46,7 @@ data Token =
       tokenOpenDelimiter :: Maybe Char,
       tokenCloseDelimiter :: Maybe Char
     }
+  deriving (Typeable)
 instance Show Token where
   show token = T.concat ["<", shownType, ">"]
     where shownType = case tokenType token of

@@ -1,3 +1,4 @@
+{-# LANGUAGE OverloadedStrings #-}
 module Parser
   (runParser)
   where
@@ -11,6 +12,7 @@ import Data.Function
 import Data.List
 import Data.Map (Map)
 import qualified Data.Map as Map
+import Data.Maybe
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Text (Text)
@@ -19,6 +21,7 @@ import Data.Word
 
 import Error
 import Token
+import Wording
 
 
 data GrammarSpecification =
@@ -26,14 +29,7 @@ data GrammarSpecification =
       grammarSpecificationTokenInterpretations :: Token -> Set Text,
       grammarSpecificationTerminals :: Set Text,
       grammarSpecificationStartSymbols :: Set Text,
-      grammarSpecificationProductions :: Map Text (Set ProductionSpecification)
-    }
-
-
-data ProductionSpecification =
-  ProductionSpecification {
-      productionSpecificationRightHandSide :: [Text],
-      productionSpecificationReducer :: Dynamic
+      grammarSpecificationProductions :: Map Text [([Text], Dynamic)]
     }
 
 
@@ -99,20 +95,216 @@ data Grammar =
     }
 
 
-data CompiledGrammar =
-  CompiledGrammar {
-      compiledGrammarTokenInterpretations :: Token -> Set Word,
-      compiledGrammarInitialStateMap :: Map Text Word,
-      compiledGrammarGotoTable :: UArray (Word, Word) Word,
-      compiledGrammarShiftTable :: UArray (Word, Word) Word,
-      compiledGrammarReductionTable :: UArray (Word, Word) Word,
-      compiledGrammarProductionRightHandSideLengths :: UArray Word Word,
-      compiledGrammarReducers :: Array Word Dynamic,
-      compiledGrammarOriginal :: Grammar,
-      compiledGrammarOriginalSymbolMap :: Map Word GrammarSymbol,
-      compiledGrammarOriginalProductionMap :: Map Word Production,
-      compiledGrammarOriginalStateMap :: Map Word GrammarState
+data TablifiedGrammar =
+  TablifiedGrammar {
+      tablifiedGrammarTokenInterpretations :: Token -> Set Word,
+      tablifiedGrammarInitialStateMap :: Map Text Word,
+      tablifiedGrammarGotoTable :: UArray (Word, Word) Word,
+      tablifiedGrammarShiftTable :: UArray (Word, Word) Word,
+      tablifiedGrammarReductionTable :: UArray (Word, Word) Word,
+      tablifiedGrammarProductionRightHandSideLengths :: UArray Word Word,
+      tablifiedGrammarReducers :: Array Word Dynamic,
+      tablifiedGrammarOriginal :: Grammar,
+      tablifiedGrammarOriginalSymbolMap :: Map Word GrammarSymbol,
+      tablifiedGrammarOriginalProductionMap :: Map Word Production,
+      tablifiedGrammarOriginalStateMap :: Map Word GrammarState
     }
+
+
+wordingGrammarSpecification :: GrammarSpecification
+wordingGrammarSpecification =
+  let headingList = ["CHAPTER", "SECTION"]
+      terminals = [(WordTokenType, "word"),
+                   (NumberTokenType, "number"),
+                   (StringTokenType, "string"),
+                   (OperatorTokenType, "operator"),
+                   (PeriodTokenType, "period"),
+                   (EllipsisTokenType, "ellipsis"),
+                   (HyphenTokenType, "hyphen"),
+                   (DashTokenType, "dash"),
+                   (CommaTokenType, "comma"),
+                   (ColonTokenType, "colon"),
+                   (SemicolonTokenType, "semicolon"),
+                   (TickTokenType, "tick"),
+                   (BacktickTokenType, "backtick"),
+                   (SpliceTokenType, "splice"),
+                   (ListSpliceTokenType, "list-splice"),
+                   (OpenParenthesisTokenType, "open-parenthesis"),
+                   (CloseParenthesisTokenType, "close-parenthesis"),
+                   (SpaceTokenType, "space"),
+                   (ParagraphBreakTokenType, "paragraph-break")]
+      tokenInterpretations token = 
+        Set.fromList
+         $ concat [maybeToList $ lookup (tokenType token) terminals,
+                   case tokenType token of
+                     WordTokenType ->
+                       if elem (tokenText token) headingList
+                         then ["heading-introducer"]
+                         else []
+                     _ -> []]
+      startSymbols =
+        Set.fromList ["toplevel", "heading", "paragraph", "sentential-form",
+                      "phrase", "word-form"]
+  in GrammarSpecification {
+         grammarSpecificationTokenInterpretations = tokenInterpretations,
+         grammarSpecificationTerminals = Set.fromList $ map snd terminals,
+         grammarSpecificationStartSymbols = startSymbols,
+         grammarSpecificationProductions =
+           Map.fromList
+             [("toplevel",
+               [(["paragraphs", "sections"],
+                 toDyn $ \paragraphs sections ->
+                   Toplevel {
+                       toplevelIntroduction = paragraphs,
+                       toplevelSections = sections
+                     })]),
+              ("sections",
+               [([],
+                 toDyn $ ([] :: [Section])),
+                (["nonempty-sections"],
+                 toDyn $ \sections -> sections :: [Section])]),
+              ("nonempty-sections",
+               [(["section"],
+                 toDyn $ \section ->
+                   [section :: Section]),
+                (["nonempty-sections", "paragraph-break", "section"],
+                 toDyn $ \sections break section ->
+                   seq (break :: Token)
+                       (sections ++ [section :: Section]))]),
+              ("section",
+               [(["heading", "paragraph-break", "paragraphs"],
+                 toDyn $ \heading break paragraphs ->
+                   seq (break :: Token)
+                       (Section {
+                            sectionHeading = heading,
+                            sectionBody = paragraphs
+                          }))]),
+              ("heading",
+               [(["heading-introducer", "phrase"],
+                 toDyn $ \introducer phrase ->
+                   Heading {
+                       headingIntroducer = introducer,
+                       headingPhrase = phrase
+                     })]),
+              ("paragraphs",
+               [([],
+                 toDyn $ ([] :: [Paragraph])),
+                (["nonempty-paragraphs"],
+                 toDyn $ \paragraphs ->
+                   paragraphs :: [Paragraph])]),
+              ("nonempty-paragraphs",
+               [(["paragraph"],
+                 toDyn $ \paragraph ->
+                   [paragraph :: Paragraph]),
+                (["nonempty-paragraphs", "paragraph-break", "paragraph"],
+                 toDyn $ \paragraphs break paragraph ->
+                   seq (break :: Token)
+                       (paragraphs ++ [paragraph :: Paragraph]))]),
+              ("paragraph",
+               [(["sentential-forms"],
+                 toDyn $ \sentences ->
+                   Paragraph {
+                       paragraphBody = sentences
+                     })]),
+              ("sentential-forms",
+               [(["sentential-form"],
+                 toDyn $ \sentence ->
+                   [sentence :: SententialForm]),
+                (["sentential-forms", "sentential-form"],
+                 toDyn $ \sentences sentence ->
+                   sentences ++ [sentence :: SententialForm])]),
+              ("sentential-form",
+               [(["sentence"],
+                 toDyn $ \sentence ->
+                   sentence :: SententialForm),
+                (["open-parenthesis", "sentential-forms", "close-parenthesis"],
+                 toDyn $ \open sentences close ->
+                   SententialParenthetical {
+                       sententialParentheticalBody = sentences,
+                       sententialParentheticalOpenDelimiter = open,
+                       sententialParentheticalCloseDelimiter = close
+                     })]),
+              ("sentence",
+               [(["phrase", "period"],
+                 toDyn $ \phrase period ->
+                   Sentence {
+                       sentenceBody = phrase,
+                       sentenceCloseDelimiter = period
+                     })]),
+              ("phrase",
+               [(["word-form"],
+                 toDyn $ \word ->
+                   Phrase {
+                       phraseWords = [word],
+                       phrasePunctuators = []
+                     }),
+                (["phrase", "word-form"],
+                 toDyn $ \phrase word ->
+                   Phrase {
+                       phraseWords = phraseWords phrase ++ [word],
+                       phrasePunctuators =
+                         phrasePunctuators phrase ++ [Nothing]
+                     }),
+                (["phrase", "punctuator", "word-form"],
+                 toDyn $ \phrase punctuator word ->
+                   Phrase {
+                       phraseWords = phraseWords phrase ++ [word],
+                       phrasePunctuators =
+                         phrasePunctuators phrase ++ [Just punctuator]
+                     })]),
+              ("word-form",
+               [(["word"],
+                 toDyn $ \word ->
+                   Word {
+                       wordToken = word
+                     }),
+                (["number"],
+                 toDyn $ \number ->
+                   Number {
+                       numberToken = number
+                     }),
+                (["operator"],
+                 toDyn $ \operator ->
+                   Operator {
+                       operatorToken = operator
+                     }),
+                (["string"],
+                 toDyn $ \string ->
+                   String {
+                       stringToken = string
+                     }),
+                (["open-parenthesis", "phrase", "close-parenthesis"],
+                 toDyn $ \open phrase close ->
+                   WordParenthetical {
+                       wordParentheticalBody = phrase,
+                       wordParentheticalOpenDelimiter = open,
+                       wordParentheticalCloseDelimiter = close
+                     }),
+                (["tick", "word-form"],
+                 toDyn $ \tick word ->
+                   QuotedWord {
+                       quotedWordBody = word,
+                       quotedWordOpenDelimiter = tick
+                     }),
+                (["backtick", "word-form"],
+                 toDyn $ \backtick word ->
+                   QuasiquotedWord {
+                       quasiquotedWordBody = word,
+                       quasiquotedWordOpenDelimiter = backtick
+                     }),
+                (["splice", "word-form"],
+                 toDyn $ \splice word ->
+                   SplicedWord {
+                       splicedWordBody = word,
+                       splicedWordOpenDelimiter = splice
+                     }),
+                (["list-splice", "word-form"],
+                 toDyn $ \listSplice word ->
+                   ListSplicedWord {
+                       listSplicedWordBody = word,
+                       listSplicedWordOpenDelimiter = listSplice
+                     })])]
+       }
 
 
 makeGrammar :: GrammarSpecification -> Maybe Grammar
@@ -120,8 +312,8 @@ makeGrammar grammarSpecification = do
   Nothing
 
 
-compileGrammar :: Grammar -> CompiledGrammar
-compileGrammar grammar = undefined
+tablifyGrammar :: Grammar -> TablifiedGrammar
+tablifyGrammar grammar = undefined
 
 
 runParser :: (Monad m) => Conduit Token m (Either Error Token)
