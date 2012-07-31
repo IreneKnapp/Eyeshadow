@@ -3,10 +3,12 @@ module Wording
   (Wording(..),
    Section(..),
    Heading(..),
+   HeadingType(..),
    Paragraph(..),
    SententialForm(..),
    Phrase(..),
-   WordForm(..))
+   WordForm(..),
+   Punctuator(..))
   where
 
 import Data.Typeable
@@ -32,9 +34,19 @@ data Section =
 
 data Heading =
   Heading {
-      headingIntroducer :: Token,
+      headingType :: HeadingType,
       headingPhrase :: Phrase
     }
+  deriving (Typeable)
+
+
+data HeadingType
+  = ChapterHeadingType {
+        chapterHeadingTypeToken :: Token
+      }
+  | SectionHeadingType {
+        sectionHeadingTypeToken :: Token
+      }
   deriving (Typeable)
 
 
@@ -99,6 +111,25 @@ data WordForm
   | ListSplicedWord {
         listSplicedWordBody :: WordForm,
         listSplicedWordOpenDelimiter :: Token
+      }
+  deriving (Typeable)
+
+
+data Punctuator
+  = Hyphen {
+        hyphenToken :: Token
+      }
+  | Dash {
+        dashToken :: Token
+      }
+  | Comma {
+        commaToken :: Token
+      }
+  | Colon {
+        colonToken :: Token
+      }
+  | Semicolon {
+        semicolonToken :: Token
       }
   deriving (Typeable)
 

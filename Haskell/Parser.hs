@@ -145,41 +145,44 @@ data TablifiedGrammar =
 
 wordingGrammarSpecification :: GrammarSpecification
 wordingGrammarSpecification =
-  let headingList = ["CHAPTER", "SECTION"]
-      terminals = [(WordTokenType, "word"),
-                   (NumberTokenType, "number"),
-                   (StringTokenType, "string"),
-                   (OperatorTokenType, "operator"),
-                   (PeriodTokenType, "period"),
-                   (EllipsisTokenType, "ellipsis"),
-                   (HyphenTokenType, "hyphen"),
-                   (DashTokenType, "dash"),
-                   (CommaTokenType, "comma"),
-                   (ColonTokenType, "colon"),
-                   (SemicolonTokenType, "semicolon"),
-                   (TickTokenType, "tick"),
-                   (BacktickTokenType, "backtick"),
-                   (SpliceTokenType, "splice"),
-                   (ListSpliceTokenType, "list-splice"),
-                   (OpenParenthesisTokenType, "open-parenthesis"),
-                   (CloseParenthesisTokenType, "close-parenthesis"),
-                   (SpaceTokenType, "space"),
-                   (ParagraphBreakTokenType, "paragraph-break")]
+  let headingAssociations = [("CHAPTER", "chapter-heading-type"),
+                             ("SECTION", "section-heading-type")]
+      terminalAssociations = [(WordTokenType, "word"),
+                              (NumberTokenType, "number"),
+                              (StringTokenType, "string"),
+                              (OperatorTokenType, "operator"),
+                              (PeriodTokenType, "period"),
+                              (EllipsisTokenType, "ellipsis"),
+                              (HyphenTokenType, "hyphen"),
+                              (DashTokenType, "dash"),
+                              (CommaTokenType, "comma"),
+                              (ColonTokenType, "colon"),
+                              (SemicolonTokenType, "semicolon"),
+                              (TickTokenType, "tick"),
+                              (BacktickTokenType, "backtick"),
+                              (SpliceTokenType, "splice"),
+                              (ListSpliceTokenType, "list-splice"),
+                              (OpenParenthesisTokenType, "open-parenthesis"),
+                              (CloseParenthesisTokenType, "close-parenthesis"),
+                              (SpaceTokenType, "space"),
+                              (ParagraphBreakTokenType, "paragraph-break")]
       tokenInterpretations token = 
         Set.fromList
-         $ concat [maybeToList $ lookup (tokenType token) terminals,
+         $ concat [maybeToList $ lookup (tokenType token)
+                                        terminalAssociations,
                    case tokenType token of
                      WordTokenType ->
-                       if elem (tokenText token) headingList
-                         then ["heading-introducer"]
-                         else []
+                       maybeToList $ lookup (tokenText token)
+                                            headingAssociations
                      _ -> []]
+      terminals = Set.union (Set.fromList $ map snd terminalAssociations)
+                            (Set.fromList $ map snd headingAssociations)
       startSymbols =
         Set.fromList ["toplevel", "heading", "paragraph", "sentential-form",
                       "phrase", "word-form"]
   in GrammarSpecification {
          grammarSpecificationTokenInterpretations = tokenInterpretations,
-         grammarSpecificationTerminals = Set.fromList $ map snd terminals,
+         grammarSpecificationTerminals = terminals,
          grammarSpecificationStartSymbols = startSymbols,
          grammarSpecificationProductions =
            Map.fromList
@@ -212,11 +215,22 @@ wordingGrammarSpecification =
                             sectionBody = paragraphs
                           }))]),
               ("heading",
-               [(["heading-introducer", "phrase"],
-                 toDyn $ \introducer phrase ->
+               [(["heading-type", "phrase"],
+                 toDyn $ \headingType phrase ->
                    Heading {
-                       headingIntroducer = introducer,
+                       headingType = headingType,
                        headingPhrase = phrase
+                     })]),
+              ("heading-type",
+               [(["chapter-heading-type"],
+                 toDyn $ \token ->
+                   ChapterHeadingType {
+                       chapterHeadingTypeToken = token
+                     }),
+                (["section-heading-type"],
+                 toDyn $ \token ->
+                   SectionHeadingType {
+                       sectionHeadingTypeToken = token
                      })]),
               ("paragraphs",
                [([],
@@ -335,6 +349,32 @@ wordingGrammarSpecification =
                    ListSplicedWord {
                        listSplicedWordBody = word,
                        listSplicedWordOpenDelimiter = listSplice
+                     })]),
+              ("punctuator",
+               [(["hyphen"],
+                 toDyn $ \hyphen ->
+                   Hyphen {
+                       hyphenToken = hyphen
+                     }),
+                (["dash"],
+                 toDyn $ \dash ->
+                   Dash {
+                       dashToken = dash
+                     }),
+                (["comma"],
+                 toDyn $ \comma ->
+                   Comma {
+                       commaToken = comma
+                     }),
+                (["colon"],
+                 toDyn $ \colon ->
+                   Colon {
+                       colonToken = colon
+                     }),
+                (["semicolon"],
+                 toDyn $ \semicolon ->
+                   Semicolon {
+                       semicolonToken = semicolon
                      })])]
        }
 
@@ -351,9 +391,19 @@ makeGrammar grammarSpecification = do
       startSymbols = grammarSpecificationStartSymbols grammarSpecification
       productionSpecifications =
         grammarSpecificationProductions grammarSpecification
-      nonterminals =
+      nonterminalsDefined =
         Set.fromList $ map (GrammarSymbol . fst)
                            $ Map.toList productionSpecifications
+      symbolsReferenced =
+        foldl' Set.union
+               Set.empty
+               $ map Set.fromList
+                     $ concat $ map (map (map GrammarSymbol . fst) . snd)
+                                    $ Map.toList productionSpecifications
+      nonterminalsReferenced =
+        Set.difference symbolsReferenced terminals
+      nonterminalsMissing =
+        Set.difference nonterminalsReferenced nonterminalsDefined
       productions =
         Set.fromList $ concat $ map (\(leftHandSide, rightHandSides) ->
           map (\(rightHandSide, reducer) ->
@@ -366,16 +416,19 @@ makeGrammar grammarSpecification = do
                     })
               rightHandSides)
         $ Map.toList productionSpecifications
+  trace (T.unpack $ T.intercalate "," $ map show $ Set.toList nonterminalsMissing) $ return ()
+  if Set.null nonterminalsMissing
+    then return ()
+    else Nothing
   grammar <- return $ Grammar {
                           grammarStateTerminals = terminals,
-                          grammarStateNonterminals = nonterminals,
+                          grammarStateNonterminals = nonterminalsDefined,
                           grammarTokenInterpretations = tokenInterpretations,
                           grammarStateProductions = productions,
                           grammarStates = Set.empty,
                           grammarInitialStateMap = Map.empty
                         }
-  trace (T.unpack $ show grammar) $ return ()
-  Nothing
+  return grammar
 
 
 tablifyGrammar :: Grammar -> TablifiedGrammar
@@ -384,15 +437,18 @@ tablifyGrammar grammar = undefined
 
 runParser :: (Monad m) => Conduit Token m (Either Error Token)
 runParser = do
-  return $ makeGrammar wordingGrammarSpecification
-  let loop = do
-        maybeToken <- await
-        case maybeToken of
-          Nothing -> return ()
-          Just token -> do
-            yield $ Right token
-            loop
-  loop
+  case makeGrammar wordingGrammarSpecification of
+    Nothing -> return ()
+    Just grammar -> do
+      trace (T.unpack $ show $ grammar) $ return ()
+      let loop = do
+            maybeToken <- await
+            case maybeToken of
+              Nothing -> return ()
+              Just token -> do
+                yield $ Right token
+                loop
+      loop
 
 
 {-
