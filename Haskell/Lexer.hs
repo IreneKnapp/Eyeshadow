@@ -14,7 +14,8 @@ module Lexer
    defaultActionMap,
    defaultLexer,
    classify,
-   runLexer)
+   runLexer,
+   stripSpaces)
   where
 
 import Prelude hiding (Show(..))
@@ -27,7 +28,6 @@ import qualified Data.ByteString as BS
 import Data.Char
 import Data.Conduit
 import qualified Data.Conduit.List as C
-import qualified Data.Conduit.Text as C
 import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Maybe
@@ -631,17 +631,9 @@ classify lexer character =
 runLexer
   :: (MonadIO m, MonadThrow m)
   => Lexer
-  -> Conduit ByteString m (Either Error Token)
+  -> Conduit Char m (Either Error Token)
 runLexer lexer = do
-  let loopTexts :: (Monad m) => Conduit Text m Char
-      loopTexts = do
-        maybeText <- await
-        case maybeText of
-          Nothing -> return ()
-          Just text -> do
-            mapM_ yield $ T.unpack text
-            loopTexts
-      process :: (MonadIO m) => Conduit Char m (Either Error Token)
+  let process :: (MonadIO m) => Conduit Char m (Either Error Token)
       process = do
         _ <- flip runStateT (lexer, initialLexerState) $ lexerMonadAction $ do
             consumeCharacter
@@ -655,7 +647,19 @@ runLexer lexer = do
           else do
             lexerAction
             loopCharacters
-  C.decode C.utf8 =$= loopTexts =$= process
+  process
+
+
+stripSpaces :: (Monad m) => Conduit Token m Token
+stripSpaces = do
+  maybeToken <- await
+  case maybeToken of
+    Nothing -> return ()
+    Just token -> do
+      if tokenType token == SpaceTokenType
+        then return ()
+        else yield token
+      stripSpaces
 
 
 initialPosition :: Position

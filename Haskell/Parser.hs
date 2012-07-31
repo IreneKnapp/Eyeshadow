@@ -16,12 +16,15 @@ import Data.Maybe
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Text (Text)
-import qualified Data.Text as Text
+import qualified Data.Text as T
 import Data.Word
 
 import Error
+import Knapp.Show
 import Token
 import Wording
+
+import Debug.Trace
 
 
 data GrammarSpecification =
@@ -38,6 +41,8 @@ instance Eq GrammarSymbol where
   (==) (GrammarSymbol a) (GrammarSymbol b) = (==) a b
 instance Ord GrammarSymbol where
   compare (GrammarSymbol a) (GrammarSymbol b) = compare a b
+instance Show GrammarSymbol where
+  show (GrammarSymbol text) = text
 
 
 data Production =
@@ -56,6 +61,11 @@ instance Ord Production where
     case on compare productionLeftHandSide a b of
       EQ -> on compare productionRightHandSide a b
       result -> result
+instance Show Production where
+  show production =
+    let shown = map show $ productionRightHandSide production
+    in T.intercalate " "
+         $ [show $ productionLeftHandSide production, "->"] ++ shown
 
 
 data Item =
@@ -73,6 +83,14 @@ instance Ord Item where
     case on compare itemProduction a b of
       EQ -> on compare itemIndex a b
       result -> result
+instance Show Item where
+  show item =
+    let production = itemProduction item
+        index = itemIndex item
+        shown = map show $ productionRightHandSide production
+        withDot = take index shown ++ ["."] ++ drop index shown
+    in T.intercalate " "
+         $ [show $ productionLeftHandSide production, "->"] ++ withDot
 
 
 data GrammarState =
@@ -82,6 +100,10 @@ data GrammarState =
       grammarStateShiftMap :: Map GrammarSymbol GrammarState,
       grammarStateReductions :: Set Production
     }
+instance Show GrammarState where
+  show state =
+    T.intercalate "\n" $ map show
+      $ Set.toList $ grammarStateItems state
 
 
 data Grammar =
@@ -93,6 +115,16 @@ data Grammar =
       grammarStates :: Set GrammarState,
       grammarInitialStateMap :: Map Text GrammarState
     }
+instance Show Grammar where
+  show grammar =
+    T.intercalate "\n"
+     $ [T.intercalate "\n"
+         $ map show $ Set.toList $ grammarStateTerminals grammar,
+        T.intercalate "\n"
+         $ map show $ Set.toList $ grammarStateNonterminals grammar,
+        T.intercalate "\n"
+         $ map show $ Set.toList $ grammarStateProductions grammar]
+       ++ (map show $ Set.toList $ grammarStates grammar)
 
 
 data TablifiedGrammar =
@@ -309,6 +341,40 @@ wordingGrammarSpecification =
 
 makeGrammar :: GrammarSpecification -> Maybe Grammar
 makeGrammar grammarSpecification = do
+  let tokenInterpretations = \token ->
+        Set.map GrammarSymbol
+                $ grammarSpecificationTokenInterpretations
+                    grammarSpecification token
+      terminals =
+        Set.map GrammarSymbol
+                $ grammarSpecificationTerminals grammarSpecification
+      startSymbols = grammarSpecificationStartSymbols grammarSpecification
+      productionSpecifications =
+        grammarSpecificationProductions grammarSpecification
+      nonterminals =
+        Set.fromList $ map (GrammarSymbol . fst)
+                           $ Map.toList productionSpecifications
+      productions =
+        Set.fromList $ concat $ map (\(leftHandSide, rightHandSides) ->
+          map (\(rightHandSide, reducer) ->
+                  Production {
+                      productionLeftHandSide =
+                        GrammarSymbol leftHandSide,
+                      productionRightHandSide =
+                        map GrammarSymbol rightHandSide,
+                      productionReducer = reducer
+                    })
+              rightHandSides)
+        $ Map.toList productionSpecifications
+  grammar <- return $ Grammar {
+                          grammarStateTerminals = terminals,
+                          grammarStateNonterminals = nonterminals,
+                          grammarTokenInterpretations = tokenInterpretations,
+                          grammarStateProductions = productions,
+                          grammarStates = Set.empty,
+                          grammarInitialStateMap = Map.empty
+                        }
+  trace (T.unpack $ show grammar) $ return ()
   Nothing
 
 
@@ -318,6 +384,7 @@ tablifyGrammar grammar = undefined
 
 runParser :: (Monad m) => Conduit Token m (Either Error Token)
 runParser = do
+  return $ makeGrammar wordingGrammarSpecification
   let loop = do
         maybeToken <- await
         case maybeToken of
@@ -329,233 +396,6 @@ runParser = do
 
 
 {-
-var _ = require('underscore')._;
-var KnappObject = require('./knapp-object');
-
-var util = require('util');
-
-var Parser = KnappObject.extend({
-initialize: function() {
-    _.bindAll(this, '_transitiveClosureOfItemSet', '_itemSetsEqual',
-              '_itemsEqual', '_productionsEqual', '_symbolsEqual',
-              '_decode', 'prepare', '_prepareGrammar', '_valuesFromState',
-              '_valuesFromValue', '_performReduction', '_performShift',
-              'parse', '_callCombiningResult', '_mapCombiningResult',
-              'parseWording', 'parseToplevel', '_parseParagraph',
-              '_parseSententialForm', '_parseSentence');
-    this.prepare();
-},
-
-grammars: {
-    'wording': {
-        headingList: ['CHAPTER', 'SECTION'],
-        
-        tokensFromInputItem: function(inputItem) {
-            var grammar = this;
-            
-            var result = [inputItem.type];
-            
-            if(inputItem.type == 'word') {
-                if(_.any(grammar.headingList, function(foundWord) {
-                    return inputItem.string == foundWord;
-                })) {
-                    result.push('heading-introducer');
-                }
-            }
-            
-            return result;
-        },
-        
-        terminals: [
-            'heading', 'paragraph-break', 'heading', 'open-parenthesis',
-            'close-parenthesis', 'period', 'word', 'heading-introducer',
-            'number', 'operator', 'string', 'tick', 'backtick', 'splice',
-            'list-splice', 'comma', 'hyphen', 'dash', 'colon', 'semicolon',
-        ],
-        
-        startSymbols: ['toplevel', 'heading', 'paragraph', 'sentential-form',
-                       'phrase', 'word-form'],
-        
-        productions: {
-            'toplevel': [
-                [['paragraphs', 'sections'], function(rhs) {
-                    return {
-                    type: 'toplevel',
-                    introduction: rhs[0],
-                    sections: rhs[1],
-                    };
-                }],
-            ],
-            'sections': [
-                [[], function(rhs) {
-                    return [];
-                }],
-                [['nonempty-sections'], function(rhs) {
-                    return rhs[0];
-                }]
-            ],
-            'nonempty-sections': [
-                [['section'], function(rhs) {
-                    return [rhs[0]];
-                }],
-                [['nonempty-sections', 'paragraph-break', 'section'],
-                function(rhs) {
-                    return _.flatten([rhs[0], [rhs[2]]], true);
-                }],
-            ],
-            'section': [
-                [['heading', 'paragraph-break', 'paragraphs'], function(rhs) {
-                    return {
-                    type: 'section',
-                    heading: rhs[0],
-                    body: rhs[2],
-                    };
-                }],
-            ],
-            'heading': [
-                [['heading-introducer', 'phrase'],
-                function(rhs) {
-                    return {
-                    type: 'heading',
-                    introducer: rhs[0],
-                    words: rhs[1],
-                    };
-                }],
-            ],
-            'paragraphs': [
-                [[], function(rhs) {
-                    return [];
-                }],
-                [['nonempty-paragraphs'], function(rhs) {
-                    return rhs[0];
-                }],
-            ],
-            'nonempty-paragraphs': [
-                [['paragraph'], function(rhs) {
-                    return [rhs[0]];
-                }],
-                [['nonempty-paragraphs', 'paragraph-break', 'paragraph'],
-                function(rhs) {
-                    return _.flatten([rhs[0], [rhs[2]]], true);
-                }],
-            ],
-            'paragraph': [
-                [['sentential-forms'], function(rhs) {
-                    return {
-                    type: 'paragraph',
-                    body: rhs[0],
-                    };
-                }],
-            ],
-            'sentential-forms': [
-                [['sentential-form'], function(rhs) {
-                    return [rhs[0]];
-                }],
-                [['sentential-forms', 'sentential-form'], function(rhs) {
-                    return _.flatten([rhs[0], [rhs[1]]], true);
-                }],
-            ],
-            'sentential-form': [
-                [['sentence'], function(rhs) {
-                    return rhs[0];
-                }],
-                [['open-parenthesis', 'sentential-forms', 'close-parenthesis'],
-                function(rhs) {
-                    return {
-                    type: 'sentential-parenthetical',
-                    body: rhs[1],
-                    openDelimiter: rhs[0],
-                    closeDelimiter: rhs[2],
-                    };
-                }],
-            ],
-            'sentence': [
-                [['phrase', 'period'], function(rhs) {
-                    return {
-                    type: 'sentence',
-                    body: rhs[0],
-                    closeDelimiter: rhs[1],
-                    };
-                }],
-            ],
-            'phrase': [
-                [['word-form'], function(rhs) {
-                    return {
-                    type: 'phrase',
-                    words: [rhs[0]],
-                    punctuators: [],
-                    };
-                }],
-                [['phrase', 'word-form'], function(rhs) {
-                    return {
-                    type: 'phrase',
-                    words: _.flatten([rhs[0].words, [rhs[1]]], true),
-                    punctuators: _.flatten([rhs[0].punctuators, [null]], true),
-                    };
-                }],
-                [['phrase', 'punctuator', 'word-form'], function(rhs) {
-                    return {
-                    type: 'phrase',
-                    words: _.flatten([rhs[0].words, [rhs[2]]], true),
-                    punctuators:
-                        _.flatten([rhs[0].punctuators, [rhs[1]]], true),
-                    };
-                }],
-            ],
-            'word-form': [
-                [['word',], function(rhs) {
-                    return rhs[0];
-                }],
-                [['number',], function(rhs) {
-                    return rhs[0];
-                }],
-                [['operator',], function(rhs) {
-                    return rhs[0];
-                }],
-                [['string',], function(rhs) {
-                    return rhs[0];
-                }],
-                [['open-parenthesis', 'phrase', 'close-parenthesis'],
-                function(rhs) {
-                    return {
-                    type: 'word-parenthetical',
-                    body: rhs[1],
-                    openDelimiter: rhs[0],
-                    closeDelimiter: rhs[2],
-                    };
-                }],
-                [['tick', 'word-form'], function(rhs) {
-                    return {
-                    type: 'quoted-word',
-                    body: rhs[1],
-                    openDelimiter: rhs[0],
-                    };
-                }],
-                [['backtick', 'word-form'], function(rhs) {
-                    return {
-                    type: 'quasiquoted-word',
-                    body: rhs[1],
-                    openDelimiter: rhs[0],
-                    };
-                }],
-                [['splice', 'word-form'], function(rhs) {
-                    return {
-                    type: 'spliced-word',
-                    body: rhs[1],
-                    openDelimiter: rhs[0],
-                    };
-                }],
-                [['list-splice', 'word-form'], function(rhs) {
-                    return {
-                    type: 'list-spliced-word',
-                    body: rhs[1],
-                    openDelimiter: rhs[0],
-                    };
-                }],
-            ],
-        },
-    },
-        
     'sentence': {
         reservedWordList: [
             'is', 'to', 'of', 'and',
@@ -1047,8 +887,10 @@ grammars: {
             ],
         },
     },
-},
+-}
 
+
+{-
 _transitiveClosureOfItemSet: function(grammar, itemSet) {
     var parser = this;
     var result = _.clone(itemSet);

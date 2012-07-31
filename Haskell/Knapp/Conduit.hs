@@ -1,10 +1,18 @@
-module Knapp.Conduit (split, toLeft, toRight, sideStream) where
+module Knapp.Conduit
+  (split,
+   toLeft,
+   toRight,
+   sideStream,
+   byCharacter)
+  where
 
 import Control.Monad
 import Control.Monad.Trans
 import Data.Conduit
 import Data.Conduit.Internal
 import qualified Data.Conduit.List as C
+import Data.Text (Text)
+import qualified Data.Text as T
 
 
 instance (MonadThrow m) => MonadThrow (Pipe l i o u m) where
@@ -79,4 +87,14 @@ sideStream = go (return ())
           where p' (Left a) = HaveOutput (go final right) final (Left a)
                 p' (Right b) = go final (p b)
                 c' () = go final (c ())
+
+
+byCharacter :: (Monad m) => Conduit Text m Char
+byCharacter = do
+  maybeText <- await
+  case maybeText of
+    Nothing -> return ()
+    Just text -> do
+      mapM_ yield $ T.unpack text
+      byCharacter
 

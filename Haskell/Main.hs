@@ -7,6 +7,7 @@ import Control.Monad.Trans.Resource
 import Data.Conduit
 import Data.Conduit.Binary
 import qualified Data.Conduit.List as C
+import qualified Data.Conduit.Text as C
 import Data.Conduit.Text
 import qualified Data.Text as T
 import System.Environment
@@ -25,7 +26,10 @@ main = do
     [sourceFilePath] -> do
       _ <- runResourceT
         $ sourceFile sourceFilePath
+        $= C.decode C.utf8
+        $= byCharacter
         $= runLexer defaultLexer
+        $= toRight stripSpaces
         $= sideStream runParser
         $$ split (do
                     liftIO $ putStrLn $ "Errors"
