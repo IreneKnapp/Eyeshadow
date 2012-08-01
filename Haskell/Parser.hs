@@ -5,6 +5,7 @@ module Parser
 
 import Prelude hiding (Show(..))
 
+import Control.Monad.State.Strict
 import Data.Array.Unboxed
 import Data.Conduit
 import Data.Dynamic
@@ -45,27 +46,39 @@ instance Show GrammarSymbol where
   show (GrammarSymbol text) = text
 
 
-data Production =
-  Production {
-      productionLeftHandSide :: GrammarSymbol,
-      productionRightHandSide :: [GrammarSymbol],
-      productionReducer :: Dynamic
-    }
+data Production
+  = Production {
+        productionLeftHandSide :: GrammarSymbol,
+        productionRightHandSide :: [GrammarSymbol],
+        productionReducer :: Dynamic
+      }
+  | StartProduction {
+        startProductionSymbol :: GrammarSymbol
+      }
 instance Eq Production where
-  (==) a b =
+  (==) a@(Production { }) b@(Production { }) =
     case on (==) productionLeftHandSide a b of
       True -> on (==) productionRightHandSide a b
       False -> False
+  (==) a@(StartProduction { }) b@(StartProduction { }) =
+    on (==) startProductionSymbol a b
+  (==) _ _ = False
 instance Ord Production where
-  compare a b =
+  compare a@(Production { }) b@(Production { }) =
     case on compare productionLeftHandSide a b of
       EQ -> on compare productionRightHandSide a b
       result -> result
+  compare a@(StartProduction { }) b@(StartProduction { }) =
+    on compare startProductionSymbol a b
+  compare (Production { }) (StartProduction { }) = GT
+  compare (StartProduction { }) (Production { }) = LT
 instance Show Production where
-  show production =
+  show production@(Production { }) =
     let shown = map show $ productionRightHandSide production
     in T.intercalate " "
          $ [show $ productionLeftHandSide production, "->"] ++ shown
+  show production@(StartProduction { }) =
+    T.concat ["(start) -> ", show $ startProductionSymbol production]
 
 
 data Item =
@@ -87,17 +100,25 @@ instance Show Item where
   show item =
     let production = itemProduction item
         index = itemIndex item
-        shown = map show $ productionRightHandSide production
-        withDot = take index shown ++ ["."] ++ drop index shown
+        shownLeft =
+          case production of
+            Production { } -> show $ productionLeftHandSide production
+            StartProduction { } -> "(start)"
+        rightHandSide =
+          case production of
+            Production { } -> productionRightHandSide production
+            StartProduction { } -> [startProductionSymbol production]
+        shownRight = map show rightHandSide
+        withDot = take index shownRight ++ ["."] ++ drop index shownRight
     in T.intercalate " "
-         $ [show $ productionLeftHandSide production, "->"] ++ withDot
+         $ [shownLeft, "->"] ++ withDot
 
 
 data GrammarState =
   GrammarState {
       grammarStateItems :: Set Item,
-      grammarStateGotoMap :: Map GrammarSymbol GrammarState,
-      grammarStateShiftMap :: Map GrammarSymbol GrammarState,
+      grammarStateGotoMap :: Map GrammarSymbol (Set Item),
+      grammarStateShiftMap :: Map GrammarSymbol (Set Item),
       grammarStateReductions :: Set Production
     }
 instance Show GrammarState where
@@ -112,8 +133,8 @@ data Grammar =
       grammarStateNonterminals :: Set GrammarSymbol,
       grammarTokenInterpretations :: Token -> Set GrammarSymbol,
       grammarStateProductions :: Set Production,
-      grammarStates :: Set GrammarState,
-      grammarInitialStateMap :: Map Text GrammarState
+      grammarStates :: Map (Set Item) GrammarState,
+      grammarInitialStateMap :: Map Text (Set Item)
     }
 instance Show Grammar where
   show grammar =
@@ -124,7 +145,7 @@ instance Show Grammar where
          $ map show $ Set.toList $ grammarStateNonterminals grammar,
         T.intercalate "\n"
          $ map show $ Set.toList $ grammarStateProductions grammar]
-       ++ (map show $ Set.toList $ grammarStates grammar)
+       ++ (map (show . snd) $ Map.toList $ grammarStates grammar)
 
 
 data TablifiedGrammar =
@@ -388,7 +409,9 @@ makeGrammar grammarSpecification = do
       terminals =
         Set.map GrammarSymbol
                 $ grammarSpecificationTerminals grammarSpecification
-      startSymbols = grammarSpecificationStartSymbols grammarSpecification
+      startSymbols =
+        Set.map GrammarSymbol
+                $ grammarSpecificationStartSymbols grammarSpecification
       productionSpecifications =
         grammarSpecificationProductions grammarSpecification
       nonterminalsDefined =
@@ -416,7 +439,8 @@ makeGrammar grammarSpecification = do
                     })
               rightHandSides)
         $ Map.toList productionSpecifications
-  trace (T.unpack $ T.intercalate "," $ map show $ Set.toList nonterminalsMissing) $ return ()
+      ((), stateMap) = runState (computeStates startSymbols productions)
+                                Map.empty
   if Set.null nonterminalsMissing
     then return ()
     else Nothing
@@ -425,10 +449,82 @@ makeGrammar grammarSpecification = do
                           grammarStateNonterminals = nonterminalsDefined,
                           grammarTokenInterpretations = tokenInterpretations,
                           grammarStateProductions = productions,
-                          grammarStates = Set.empty,
+                          grammarStates = stateMap,
                           grammarInitialStateMap = Map.empty
                         }
   return grammar
+
+
+computeStates
+  :: Set GrammarSymbol
+  -> Set Production
+  -> State (Map (Set Item) GrammarState) ()
+computeStates startSymbols productions = do
+  let putState grammarState = do
+        monadicState <- get
+        let itemSet = grammarStateItems grammarState
+            monadicState' = Map.insert itemSet grammarState monadicState
+        put monadicState'
+      getState itemSet = do
+        monadicState <- get
+        return $ Map.lookup itemSet monadicState
+      initialQueue =
+        map (\startSymbol ->
+               let kernel =
+                     Set.singleton
+                      $ Item {
+                            itemProduction =
+                              StartProduction {
+                                  startProductionSymbol = startSymbol
+                                },
+                            itemIndex = 0
+                          }
+               in closeItemSet productions kernel)
+            (Set.toList startSymbols)
+      processQueue [] = return ()
+      processQueue (itemSet : rest) = do
+        let state = GrammarState {
+                        grammarStateItems = itemSet,
+                        grammarStateGotoMap = Map.empty,
+                        grammarStateShiftMap = Map.empty,
+                        grammarStateReductions = Set.empty
+                      }
+        putState state
+        processQueue rest
+  processQueue initialQueue
+
+
+closeItemSet :: Set Production -> Set Item -> Set Item
+closeItemSet productions itemSet =
+  let loop soFar [] = soFar
+      loop soFar (item : rest) =
+        let maybeNextSymbol =
+              case itemProduction item of
+                production@(Production { }) ->
+                  let index = itemIndex item
+                  in if index < (length $ productionRightHandSide production)
+                       then Just $ productionRightHandSide production !! index
+                       else Nothing
+                production@(StartProduction { }) ->
+                  if itemIndex item == 0
+                    then Just $ startProductionSymbol production
+                    else Nothing
+            relevantProductions =
+              Set.filter (\production ->
+                            case (maybeNextSymbol, production) of
+                              (Just nextSymbol, Production { }) ->
+                                productionLeftHandSide production == nextSymbol
+                              _ -> False)
+                         productions
+            foundItems =
+              Set.map (\production -> Item {
+                                          itemProduction = production,
+                                          itemIndex = 0
+                                        })
+                      relevantProductions
+            newQueue = rest ++ (Set.toList $ Set.difference foundItems soFar)
+        in loop (Set.union soFar foundItems) newQueue
+  in loop Set.empty (Set.toList itemSet)
 
 
 tablifyGrammar :: Grammar -> TablifiedGrammar
@@ -947,38 +1043,6 @@ runParser = do
 
 
 {-
-_transitiveClosureOfItemSet: function(grammar, itemSet) {
-    var parser = this;
-    var result = _.clone(itemSet);
-    for(var i = 0; i < result.length; i++) {
-        var item = result[i];
-        if(item.position < item.production.rhs.length) {
-            var symbol = item.production.rhs[item.position];
-            if(_.any(grammar._nonterminals, function(nonterminal) {
-                return nonterminal == symbol;
-            })) {
-                for(var j = 0; j < grammar._productions.length; j++) {
-                    var production = grammar._productions[j];
-                    
-                    if(!parser._symbolsEqual(symbol, production.lhs)) continue;
-                    
-                    var newItem = {
-                    production: production,
-                    position: 0,
-                    };
-                    
-                    for(var k = 0; k < result.length; k++) {
-                        var foundItem = result[k];
-                        if(parser._itemsEqual(foundItem, newItem)) break;
-                    }
-                    if(k == result.length) result.push(newItem);
-                }
-            }
-        }
-    }
-    return result;
-},
-
 _itemSetsEqual: function(itemSetA, itemSetB) {
     for(var i = 0; i < itemSetA.length; i++) {
         var found = false;
