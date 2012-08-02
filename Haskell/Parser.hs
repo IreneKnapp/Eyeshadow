@@ -129,23 +129,29 @@ instance Show GrammarState where
 
 data Grammar =
   Grammar {
-      grammarStateTerminals :: Set GrammarSymbol,
-      grammarStateNonterminals :: Set GrammarSymbol,
+      grammarTerminals :: Set GrammarSymbol,
+      grammarNonterminals :: Set GrammarSymbol,
       grammarTokenInterpretations :: Token -> Set GrammarSymbol,
-      grammarStateProductions :: Set Production,
+      grammarProductions :: Set Production,
       grammarStates :: Map (Set Item) GrammarState,
       grammarInitialStateMap :: Map Text (Set Item)
     }
 instance Show Grammar where
   show grammar =
-    T.intercalate "\n"
-     $ [T.intercalate "\n"
-         $ map show $ Set.toList $ grammarStateTerminals grammar,
-        T.intercalate "\n"
-         $ map show $ Set.toList $ grammarStateNonterminals grammar,
-        T.intercalate "\n"
-         $ map show $ Set.toList $ grammarStateProductions grammar]
-       ++ (map (show . snd) $ Map.toList $ grammarStates grammar)
+    let line text = T.concat ["  ", text, "\n"]
+        section (header, lines) = T.concat $ [header, "\n"] ++ (map line lines)
+        sections sections = T.intercalate "\n" $ map section sections
+    in sections $ [("TERMINALS",
+                    map show $ Set.toList $ grammarTerminals grammar),
+                   ("NONTERMINALS",
+                    map show $ Set.toList $ grammarNonterminals grammar),
+                   ("PRODUCTIONS",
+                    map show $ Set.toList $ grammarProductions grammar)]
+                  ++ (zipWith (\index (_, state) ->
+                                  (T.concat ["STATE ", show index],
+                                   T.lines $ show state))
+                              ([0 ..] :: [Int])
+                              (Map.toList $ grammarStates grammar))
 
 
 data TablifiedGrammar =
@@ -445,10 +451,10 @@ makeGrammar grammarSpecification = do
     then return ()
     else Nothing
   grammar <- return $ Grammar {
-                          grammarStateTerminals = terminals,
-                          grammarStateNonterminals = nonterminalsDefined,
+                          grammarTerminals = terminals,
+                          grammarNonterminals = nonterminalsDefined,
                           grammarTokenInterpretations = tokenInterpretations,
-                          grammarStateProductions = productions,
+                          grammarProductions = productions,
                           grammarStates = stateMap,
                           grammarInitialStateMap = Map.empty
                         }
@@ -523,7 +529,7 @@ closeItemSet productions itemSet =
                                         })
                       relevantProductions
             newQueue = rest ++ (Set.toList $ Set.difference foundItems soFar)
-        in loop (Set.union soFar foundItems) newQueue
+        in loop (Set.insert item $ Set.union soFar foundItems) newQueue
   in loop Set.empty (Set.toList itemSet)
 
 
