@@ -1,3 +1,4 @@
+{-# LANGUAGE OverloadedStrings #-}
 module Eyeshadow.Conduit
   (split,
    toLeft,
@@ -19,10 +20,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 
 import Eyeshadow.Types
-
-
-instance (MonadThrow m) => MonadThrow (Pipe l i o u m) where
-  monadThrow error = lift $ monadThrow error
+import qualified Eyeshadow.UTF8 as UTF8
 
 
 split
@@ -105,7 +103,9 @@ byCharacter = do
       byCharacter
 
 
-readFile :: FilePath -> Producer (ResourceT IO) T.Text
+readFile
+  :: FilePath
+  -> Producer (ResourceT IO) (Either Diagnostic (Char, SourcePosition))
 readFile filePath =
   sourceFile filePath $= toBytes $= addByteOffsets
   where toBytes = do
@@ -116,14 +116,20 @@ readFile filePath =
               mapM yield $ BS.unpack byteString
               toBytes
         addByteOffsets = do
-          let loop position = do
-                maybeByte <- await
-                case maybeByte of
-                  Nothing -> return ()
-                  Just byte -> do
-                    (c, byteCount) <- loop' $ BS.singleton byte
-                    yield (c, position)
-                    let oldByteOffset = sourcePositionByteOffset position
+          let loop position byteString = do
+                case UTF8.decode byteString of
+                  Left UTF8.InvalidDataDecodingFailure -> do
+                    diagnoseInvalidUTF8 $ spanForBytes position byteString
+                  Left UTF8.InsufficientDataDecodingFailure -> do
+                    maybeByte <- await
+                    case maybeByte of
+                      Nothing -> do
+                        diagnoseUnexpectedEndOfFileInUTF8
+                          $ spanForBytes position byteString
+                      Just byte -> loop position $ BS.snoc byteString byte
+                  Right (c, _) -> do
+                    let byteCount = BS.length byteString
+                        oldByteOffset = sourcePositionByteOffset position
                         oldCharacterOffset =
                           sourcePositionCharacterOffset position
                         oldLine = sourcePositionLine position
@@ -145,24 +151,56 @@ readFile filePath =
                               sourcePositionLine = newLine,
                               sourcePositionColumn = newColumn
                             }
-                    loop newPosition
-              loop' byteString = do
-                case T.decodeUtf8' byteString of
-                  Left _ -> do
-                    maybeByte <- await
-                    case maybeByte of
-                      Nothing
-                    loop' $ BS.snoc byteString byte
-                  Right text -> do
-                    c <- head text
-                    return (c, BS.length byteString)
-          loop BS.empty
-               $ SourcePosition { 
-                     sourcePositionByteOffset = 0,
-                     sourcePositionCharacterOffset = 0,
-                     sourcePositionLine = 1,
-                     sourcePositionColumn = 1
-                   }
+                    yield $ Right (c, position)
+                    loop newPosition BS.empty
+          loop (SourcePosition { 
+                    sourcePositionByteOffset = 0,
+                    sourcePositionCharacterOffset = 0,
+                    sourcePositionLine = 1,
+                    sourcePositionColumn = 1
+                  })
+                BS.empty
+        spanForBytes position byteString =
+          let endPosition =
+                position {
+                    sourcePositionByteOffset =
+                      sourcePositionByteOffset position + BS.length byteString
+                  }
+          in SourceSpan {
+                 sourceSpanStart = position,
+                 sourceSpanEnd = endPosition
+               }
 
 
+diagnoseInvalidUTF8
+  :: (Monad m)
+  => SourceSpan
+  -> Producer m (Either Diagnostic b)
+diagnoseInvalidUTF8 span = yield $ Left $
+  Diagnostic {
+              diagnosticHeadline = "Invalid UTF-8 (truncated by end-of-file)",
+              diagnosticDescription =
+                T.concat
+                  ["This implies that the source file is not valid UTF-8, ",
+                   "possibly because it has been truncated as by an ",
+                   "incomplete download.  Verify the integrity of the file."],
+              diagnosticDetails =
+                [("Invalid character", span)]
+            }
 
+
+diagnoseUnexpectedEndOfFileInUTF8
+  :: (Monad m)
+  => SourceSpan
+  -> Producer m (Either Diagnostic b)
+diagnoseUnexpectedEndOfFileInUTF8 span = yield $ Left $
+  Diagnostic {
+       diagnosticHeadline = "Invalid UTF-8 (truncated by end-of-file)",
+       diagnosticDescription =
+         T.concat
+           ["This implies that the source file is not valid UTF-8, ",
+            "possibly because it has been truncated as by an ",
+            "incomplete download.  Verify the integrity of the file."],
+       diagnosticDetails =
+         [("Invalid character", span)]
+     }
