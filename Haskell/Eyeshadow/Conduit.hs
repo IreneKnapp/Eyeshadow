@@ -9,11 +9,16 @@ module Eyeshadow.Conduit
 
 import Control.Monad
 import Control.Monad.Trans
+import qualified Data.ByteString as BS
 import Data.Conduit
-import Data.Conduit.Internal
+import Data.Conduit.Binary
+import Data.Conduit.Internal hiding (await, yield)
 import qualified Data.Conduit.List as C
+import Data.Conduit.Text
 import Data.Text (Text)
 import qualified Data.Text as T
+
+import Eyeshadow.Types
 
 
 instance (MonadThrow m) => MonadThrow (Pipe l i o u m) where
@@ -102,14 +107,62 @@ byCharacter = do
 
 readFile :: FilePath -> Producer (ResourceT IO) T.Text
 readFile filePath =
-  sourceFile filePath $= addByteOffsets $= decode utf8 $=
-  where addByteOffsets = do
+  sourceFile filePath $= toBytes $= addByteOffsets
+  where toBytes = do
+          maybeByteString <- await
+          case maybeByteString of
+            Nothing -> return ()
+            Just byteString -> do
+              mapM yield $ BS.unpack byteString
+              toBytes
+        addByteOffsets = do
           let loop position = do
-                await sourcePosition
-                do
-          loop $ SourcePosition { 
+                maybeByte <- await
+                case maybeByte of
+                  Nothing -> return ()
+                  Just byte -> do
+                    (c, byteCount) <- loop' $ BS.singleton byte
+                    yield (c, position)
+                    let oldByteOffset = sourcePositionByteOffset position
+                        oldCharacterOffset =
+                          sourcePositionCharacterOffset position
+                        oldLine = sourcePositionLine position
+                        oldColumn = sourcePositionColumn position
+                        newByteOffset = oldByteOffset + byteCount
+                        newCharacterOffset = oldCharacterOffset + 1
+                        isNewline = c == '\n'
+                        newLine = if isNewline
+                                    then oldLine + 1
+                                    else oldLine
+                        newColumn = if isNewline
+                                      then 1
+                                      else oldColumn + 1
+                        newPosition =
+                          SourcePosition {
+                              sourcePositionByteOffset = newByteOffset,
+                              sourcePositionCharacterOffset =
+                                newCharacterOffset,
+                              sourcePositionLine = newLine,
+                              sourcePositionColumn = newColumn
+                            }
+                    loop newPosition
+              loop' byteString = do
+                case T.decodeUtf8' byteString of
+                  Left _ -> do
+                    maybeByte <- await
+                    case maybeByte of
+                      Nothing
+                    loop' $ BS.snoc byteString byte
+                  Right text -> do
+                    c <- head text
+                    return (c, BS.length byteString)
+          loop BS.empty
+               $ SourcePosition { 
                      sourcePositionByteOffset = 0,
                      sourcePositionCharacterOffset = 0,
                      sourcePositionLine = 1,
                      sourcePositionColumn = 1
                    }
+
+
+
