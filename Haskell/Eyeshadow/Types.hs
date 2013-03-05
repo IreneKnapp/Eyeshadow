@@ -1,10 +1,28 @@
 module Eyeshadow.Types
-  (SourcePosition(..),
+  (Options(..),
+   OutputFormat(..),
+   SourceFileSpecification(..),
+   SourcePosition(..),
    SourceSpan(..),
    Diagnostic(..))
   where
 
 import qualified Data.Text as T
+
+
+data Options =
+  Options {
+      optionsOutputFormat :: OutputFormat,
+      optionsOutputSourceSnippets :: Bool
+    }
+
+data OutputFormat
+  = TextOutputFormat
+  | TerminalOutputFormat
+  | JSONOutputFormat
+
+data SourceFileSpecification =
+  SourceFileSpecification FilePath
 
 
 data SourcePosition =
@@ -25,6 +43,5 @@ data Diagnostic =
   Diagnostic {
       diagnosticHeadline :: T.Text,
       diagnosticDescription :: T.Text,
-      diagnosticDetails :: [(T.Text, SourceSpan)]
+      diagnosticDetails :: [(T.Text, SourceFileSpecification, SourceSpan)]
     }
-

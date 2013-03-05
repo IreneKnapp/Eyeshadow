@@ -1,4 +1,4 @@
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE OverloadedStrings, Rank2Types #-}
 module Eyeshadow.Conduit
   (split,
    toLeft,
@@ -15,9 +15,11 @@ import Data.Conduit
 import Data.Conduit.Binary
 import Data.Conduit.Internal hiding (await, yield)
 import qualified Data.Conduit.List as C
-import Data.Conduit.Text
 import Data.Text (Text)
 import qualified Data.Text as T
+import Data.Word
+
+import Prelude hiding (readFile)
 
 import Eyeshadow.Types
 import qualified Eyeshadow.UTF8 as UTF8
@@ -45,8 +47,7 @@ One thing to note is that you have to pass around the most recent finalizer expl
 
 
 toLeft :: Monad m => Conduit a m a' -> Conduit (Either a b) m (Either a' b)
-toLeft =
-    go (return ())
+toLeft mainConduit = ConduitM $ go (return ()) $ unConduitM mainConduit
   where
     go final (PipeM mp) = PipeM (liftM (go final) mp)
     go final (Leftover p a) = Leftover (go final p) (Left a)
@@ -62,8 +63,7 @@ toLeft =
 
 
 toRight :: Monad m => Conduit b m b' -> Conduit (Either a b) m (Either a b')
-toRight =
-    go (return ())
+toRight mainConduit = ConduitM $ go (return ()) $ unConduitM mainConduit
   where
     go final (PipeM mp) = PipeM (liftM (go final) mp)
     go final (Leftover p b) = Leftover (go final p) (Right b)
@@ -82,7 +82,7 @@ sideStream
   :: Monad m
   => Conduit b m (Either a b')
   -> Conduit (Either a b) m (Either a b')
-sideStream = go (return ())
+sideStream mainConduit = ConduitM $ go (return ()) $ unConduitM mainConduit
   where go final (PipeM mp) = PipeM (liftM (go final) mp)
         go final (Leftover p b) = Leftover (go final p) (Right b)
         go _ (Done ()) = Done ()
@@ -105,26 +105,32 @@ byCharacter = do
 
 readFile
   :: FilePath
-  -> Producer (ResourceT IO) (Either Diagnostic (Char, SourcePosition))
+  -> Source (ResourceT IO) (Either Diagnostic (Char, SourcePosition))
 readFile filePath =
-  sourceFile filePath $= toBytes $= addByteOffsets
-  where toBytes = do
+  sourceFile filePath $= toBytes $= addSourcePositions
+  where file :: SourceFileSpecification
+        file = SourceFileSpecification filePath
+        toBytes :: (Monad m) => Conduit BS.ByteString m Word8
+        toBytes = do
           maybeByteString <- await
           case maybeByteString of
             Nothing -> return ()
             Just byteString -> do
-              mapM yield $ BS.unpack byteString
+              mapM_ yield $ BS.unpack byteString
               toBytes
-        addByteOffsets = do
+        addSourcePositions
+          :: (Monad m)
+          => Conduit Word8 m (Either Diagnostic (Char, SourcePosition))
+        addSourcePositions = do
           let loop position byteString = do
                 case UTF8.decode byteString of
                   Left UTF8.InvalidDataDecodingFailure -> do
-                    diagnoseInvalidUTF8 $ spanForBytes position byteString
+                    diagnoseInvalidUTF8 file $ spanForBytes position byteString
                   Left UTF8.InsufficientDataDecodingFailure -> do
                     maybeByte <- await
                     case maybeByte of
                       Nothing -> do
-                        diagnoseUnexpectedEndOfFileInUTF8
+                        diagnoseUnexpectedEndOfFileInUTF8 file
                           $ spanForBytes position byteString
                       Just byte -> loop position $ BS.snoc byteString byte
                   Right (c, _) -> do
@@ -174,9 +180,10 @@ readFile filePath =
 
 diagnoseInvalidUTF8
   :: (Monad m)
-  => SourceSpan
+  => SourceFileSpecification
+  -> SourceSpan
   -> Producer m (Either Diagnostic b)
-diagnoseInvalidUTF8 span = yield $ Left $
+diagnoseInvalidUTF8 file span = yield $ Left $
   Diagnostic {
               diagnosticHeadline = "Invalid UTF-8 (truncated by end-of-file)",
               diagnosticDescription =
@@ -185,15 +192,16 @@ diagnoseInvalidUTF8 span = yield $ Left $
                    "possibly because it has been truncated as by an ",
                    "incomplete download.  Verify the integrity of the file."],
               diagnosticDetails =
-                [("Invalid character", span)]
+                [("Invalid character", file, span)]
             }
 
 
 diagnoseUnexpectedEndOfFileInUTF8
   :: (Monad m)
-  => SourceSpan
+  => SourceFileSpecification
+  -> SourceSpan
   -> Producer m (Either Diagnostic b)
-diagnoseUnexpectedEndOfFileInUTF8 span = yield $ Left $
+diagnoseUnexpectedEndOfFileInUTF8 file span = yield $ Left $
   Diagnostic {
        diagnosticHeadline = "Invalid UTF-8 (truncated by end-of-file)",
        diagnosticDescription =
@@ -202,5 +210,5 @@ diagnoseUnexpectedEndOfFileInUTF8 span = yield $ Left $
             "possibly because it has been truncated as by an ",
             "incomplete download.  Verify the integrity of the file."],
        diagnosticDetails =
-         [("Invalid character", span)]
+         [("Invalid character", file, span)]
      }
