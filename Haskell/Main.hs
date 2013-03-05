@@ -42,23 +42,51 @@ main = do
       case diagnostics of
         [] -> return ()
         _ -> outputDiagnostics options diagnostics
-    _ -> outputDiagnostics options diagnostics
+    (_, Left usage) -> outputDiagnostics options $ diagnostics ++ [usage]
+    _ -> outputDiagnostics options $ diagnostics
 
 
 process :: IO.FilePath -> IO [Diagnostic]
 process sourcePath = runResourceT $ do
-  readFile sourcePath $$ do
-    let loop = do
-          maybeItem <- await
-          case maybeItem of
-            Nothing -> return ()
-            Just item -> liftIO $ IO.putStrLn "..."
-    loop
-  return []
+  readFile sourcePath $= sideStream showIt $= discardRight $$ accumulate
+  where showIt = do
+          let loop = do
+                maybeItem <- await
+                case maybeItem of
+                  Nothing -> return ()
+                  Just (c, p) -> do
+                    liftIO $ IO.putStrLn
+                     $ (show c) ++ " "
+                       ++ (show $ sourcePositionLine p) ++ ":"
+                       ++ (show $ sourcePositionColumn p)
+                    loop
+          loop
+        discardRight = do
+          let loop = do
+                maybeItem <- await
+                case maybeItem of
+                  Nothing -> return ()
+                  Just (Left diagnostic) -> do
+                    yield diagnostic
+                    loop
+                  _ -> loop
+          loop
+        accumulate = do
+          let loop soFar = do
+                maybeItem <- await
+                case maybeItem of
+                  Nothing -> return soFar
+                  Just item -> loop $ soFar ++ [item]
+          loop []
 
 
 outputDiagnostics :: Options -> [Diagnostic] -> IO ()
-outputDiagnostics options diagnostics = return ()
+outputDiagnostics options diagnostics = do
+  mapM_ (\diagnostic -> do
+           IO.putStrLn $ (T.unpack $ diagnosticHeadline diagnostic))
+        diagnostics
+  let n = length diagnostics
+  IO.putStrLn $ (show n) ++ " diagnostic" ++ (if n == 1 then "" else "s")
 
 
 takeOptions :: [String] -> ([Diagnostic], Options, [String])

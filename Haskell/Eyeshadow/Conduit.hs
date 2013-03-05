@@ -125,13 +125,16 @@ readFile filePath =
           let loop position byteString = do
                 case UTF8.decode byteString of
                   Left UTF8.InvalidDataDecodingFailure -> do
-                    diagnoseInvalidUTF8 file $ spanForBytes position byteString
+                    diagnoseInvalidUTF8 file
+                      $ spanForBytes position byteString
                   Left UTF8.InsufficientDataDecodingFailure -> do
                     maybeByte <- await
                     case maybeByte of
                       Nothing -> do
-                        diagnoseUnexpectedEndOfFileInUTF8 file
-                          $ spanForBytes position byteString
+                        if BS.null byteString
+                          then return ()
+                          else diagnoseUnexpectedEndOfFileInUTF8 file
+                                 $ spanForBytes position byteString
                       Just byte -> loop position $ BS.snoc byteString byte
                   Right (c, _) -> do
                     let byteCount = BS.length byteString
@@ -185,15 +188,15 @@ diagnoseInvalidUTF8
   -> Producer m (Either Diagnostic b)
 diagnoseInvalidUTF8 file span = yield $ Left $
   Diagnostic {
-              diagnosticHeadline = "Invalid UTF-8 (truncated by end-of-file)",
-              diagnosticDescription =
-                T.concat
-                  ["This implies that the source file is not valid UTF-8, ",
-                   "possibly because it has been truncated as by an ",
-                   "incomplete download.  Verify the integrity of the file."],
-              diagnosticDetails =
-                [("Invalid character", file, span)]
-            }
+      diagnosticHeadline = "Invalid UTF-8",
+      diagnosticDescription =
+        T.concat
+          ["This implies that the source file is not valid UTF-8, ",
+           "possibly because it has been truncated as by an ",
+           "incomplete download.  Verify the integrity of the file."],
+      diagnosticDetails =
+        [("Invalid character", file, span)]
+    }
 
 
 diagnoseUnexpectedEndOfFileInUTF8
@@ -212,3 +215,4 @@ diagnoseUnexpectedEndOfFileInUTF8 file span = yield $ Left $
        diagnosticDetails =
          [("Invalid character", file, span)]
      }
+
