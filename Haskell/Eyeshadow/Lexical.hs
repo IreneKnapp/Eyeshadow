@@ -14,28 +14,50 @@ import Data.List
 import Eyeshadow.Types
 
 
+data CharacterClassification
+  = DigitCharacterClassification
+  | ConstituentCharacterClassification
+  | PunctuationCharacterClassification
+  | SpaceCharacterClassification
+
+
+classifyCharacter :: Char -> CharacterClassification
+classifyCharacter c | Char.isDigit c = DigitCharacterClassification
+classifyCharacter c | Char.isSpace c = SpaceCharacterClassification
+classifyCharacter c | elem c "()'`," = PunctuationCharacterClassification
+classifyCharacter _ = ConstituentCharacterClassification
+
+
 lex
   :: (Monad m)
   => Conduit (Char, SourcePosition)
              m
              (Either Diagnostic (SExpression, SourcePosition))
 lex = do
-  let readOne inParentheses quasiquotationDepth = do
+  let 
+      readOne inParentheses quasiquotationDepth = do
         maybeItem <- peek
         case maybeItem of
           Nothing -> return ()
-          Just c | Char.isDigit c ->
-                     possibleNumber <- accumulateWhile Char.isDigit
-                     case reads $ T.unpack possibleNumber of
-                       [(value, "")] -> return $ Just $ SInteger value
-                       _ -> do
-                         return Nothing
-                         -- TODO
-                 | Char.isSpace c -> do
-                     _ <- await
-                     readOne inParentheses quasiquotationDepth
+          Just (c, _) ->
+            case classifyCharacter c of
+              SpaceCharacterClassification -> do
+                readOne inParentheses quasiquotationDepth
+              ConstituentCharacterClassification -> do
+              DigitCharacterClassification -> do
+              PunctuationCharacterClassification -> do
+                possibleNumber <- accumulateWhile Char.isDigit
+                case reads $ T.unpack possibleNumber of
+                  [(value, "")] -> return $ Just $ SInteger value
+                  _ -> do
+                    return Nothing
+                    -- TODO
+            | Char.isSpace c -> do
+                _ <- await
+                readOne inParentheses quasiquotationDepth
           Just '(' -> do
             (_, startPosition) <- await
-            let loop = do
+            let loop soFar = do
                   maybeItem <- readOne True quasiquotationDepth
-
+                  case maybeItem of
+                    
