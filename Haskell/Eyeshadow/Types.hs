@@ -1,13 +1,28 @@
+{-# LANGUAGE OverloadedStrings #-}
 module Eyeshadow.Types
-  (Options(..),
+  (Show(..),
+   Options(..),
    OutputFormat(..),
    SourceFileSpecification(..),
    SourcePosition(..),
    SourceSpan(..),
-   Diagnostic(..))
+   Diagnostic(..),
+   SExpression)
   where
 
 import qualified Data.Text as T
+import qualified Prelude as Prelude
+
+import Prelude
+  (Bool(..),
+   FilePath,
+   Int,
+   map,
+   ($))
+
+
+class Show showable where
+  show :: showable -> T.Text
 
 
 data Options =
@@ -45,3 +60,19 @@ data Diagnostic =
       diagnosticDescription :: T.Text,
       diagnosticDetails :: [(T.Text, SourceFileSpecification, SourceSpan)]
     }
+
+data SExpression
+  = SInteger Int
+  | SSymbol [T.Text]
+  | SList [SExpression]
+  | SQuoted SExpression
+  | SQuasiquoted SExpression
+  | SAntiquoted SExpression
+instance Show SExpression where
+  show (SInteger int) = T.pack $ Prelude.show int
+  show (SSymbol parts) = T.intercalate ":" parts
+  show (SList items) = T.concat ["(", T.intercalate " " $ map show items, ")"]
+  show (SQuoted item) = T.concat ["'", show item]
+  show (SQuasiquoted item) = T.concat ["`", show item]
+  show (SAntiquoted item) = T.concat [",", show item]
+

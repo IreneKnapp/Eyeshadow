@@ -11,6 +11,7 @@ import Data.Conduit
 import Data.List
 
 import Eyeshadow.Conduit
+import Eyeshadow.Lexical
 import Eyeshadow.Types
 
 
@@ -54,11 +55,11 @@ process sourcePath = runResourceT $ do
                 maybeItem <- await
                 case maybeItem of
                   Nothing -> return ()
-                  Just (c, p) -> do
+                  Just (c, position) -> do
                     liftIO $ IO.putStrLn
-                     $ (show c) ++ " "
-                       ++ (show $ sourcePositionLine p) ++ ":"
-                       ++ (show $ sourcePositionColumn p)
+                     $ (show $ sourcePositionLine position) ++ ":"
+                       ++ (show $ sourcePositionColumn position)
+                       ++ " " ++ (show c)
                     loop
           loop
         discardRight = do
