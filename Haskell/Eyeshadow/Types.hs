@@ -7,7 +7,7 @@ module Eyeshadow.Types
    SourcePosition(..),
    SourceSpan(..),
    Diagnostic(..),
-   SExpression)
+   SExpression(..))
   where
 
 import qualified Data.Text as T
@@ -36,8 +36,9 @@ data OutputFormat
   | TerminalOutputFormat
   | JSONOutputFormat
 
-data SourceFileSpecification =
-  SourceFileSpecification FilePath
+data SourceFileSpecification
+  = FileSourceFileSpecification FilePath
+  | TerminalSourceFileSpecification
 
 
 data SourcePosition =
@@ -62,17 +63,28 @@ data Diagnostic =
     }
 
 data SExpression
-  = SInteger Int
-  | SSymbol [T.Text]
-  | SList [SExpression]
-  | SQuoted SExpression
-  | SQuasiquoted SExpression
-  | SAntiquoted SExpression
+  = SNumber SourceSpan T.Text
+  | SString SourceSpan T.Text
+  | SSymbol SourceSpan [T.Text]
+  | SList SourceSpan [SExpression]
+  | SQuoted SourceSpan SExpression
+  | SQuasiquoted SourceSpan SExpression
+  | SAntiquoted SourceSpan SExpression
 instance Show SExpression where
-  show (SInteger int) = T.pack $ Prelude.show int
-  show (SSymbol parts) = T.intercalate ":" parts
-  show (SList items) = T.concat ["(", T.intercalate " " $ map show items, ")"]
-  show (SQuoted item) = T.concat ["'", show item]
-  show (SQuasiquoted item) = T.concat ["`", show item]
-  show (SAntiquoted item) = T.concat [",", show item]
+  show (SNumber _ int) = int
+  show (SString _ string) =
+    T.concat ["\"",
+              T.foldl' (\soFar c ->
+                          T.concat [soFar,
+                                    case c of
+                                      '"' -> "\"\""
+                                      _ -> T.singleton c])
+                       string
+              "\""]
+  show (SSymbol _ parts) = T.intercalate ":" parts
+  show (SList _ items) =
+    T.concat ["(", T.intercalate " " $ map show items, ")"]
+  show (SQuoted _ item) = T.concat ["'", show item]
+  show (SQuasiquoted _ item) = T.concat ["`", show item]
+  show (SAntiquoted _ item) = T.concat [",", show item]
 

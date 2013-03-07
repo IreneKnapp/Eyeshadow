@@ -5,7 +5,8 @@ module Eyeshadow.Conduit
    toRight,
    sideStream,
    byCharacter,
-   readFile)
+   readFile,
+   readTerminal)
   where
 
 import Control.Monad
@@ -18,6 +19,7 @@ import qualified Data.Conduit.List as C
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Word
+import qualified System.IO as IO
 
 import Prelude hiding (readFile)
 
@@ -106,79 +108,99 @@ byCharacter = do
 readFile
   :: FilePath
   -> Source (ResourceT IO) (Either Diagnostic (Char, SourcePosition))
-readFile filePath =
-  sourceFile filePath $= toBytes $= addSourcePositions
-  where file :: SourceFileSpecification
-        file = SourceFileSpecification filePath
-        toBytes :: (Monad m) => Conduit BS.ByteString m Word8
-        toBytes = do
-          maybeByteString <- await
-          case maybeByteString of
-            Nothing -> return ()
-            Just byteString -> do
-              mapM_ yield $ BS.unpack byteString
-              toBytes
-        addSourcePositions
-          :: (Monad m)
-          => Conduit Word8 m (Either Diagnostic (Char, SourcePosition))
-        addSourcePositions = do
-          let loop position byteString = do
-                case UTF8.decode byteString of
-                  Left UTF8.InvalidDataDecodingFailure -> do
-                    diagnoseInvalidUTF8 file
-                      $ spanForBytes position byteString
-                  Left UTF8.InsufficientDataDecodingFailure -> do
-                    maybeByte <- await
-                    case maybeByte of
-                      Nothing -> do
-                        if BS.null byteString
-                          then return ()
-                          else diagnoseUnexpectedEndOfFileInUTF8 file
-                                 $ spanForBytes position byteString
-                      Just byte -> loop position $ BS.snoc byteString byte
-                  Right (c, _) -> do
-                    let byteCount = BS.length byteString
-                        oldByteOffset = sourcePositionByteOffset position
-                        oldCharacterOffset =
-                          sourcePositionCharacterOffset position
-                        oldLine = sourcePositionLine position
-                        oldColumn = sourcePositionColumn position
-                        newByteOffset = oldByteOffset + byteCount
-                        newCharacterOffset = oldCharacterOffset + 1
-                        isNewline = c == '\n'
-                        newLine = if isNewline
-                                    then oldLine + 1
-                                    else oldLine
-                        newColumn = if isNewline
-                                      then 1
-                                      else oldColumn + 1
-                        newPosition =
-                          SourcePosition {
-                              sourcePositionByteOffset = newByteOffset,
-                              sourcePositionCharacterOffset =
-                                newCharacterOffset,
-                              sourcePositionLine = newLine,
-                              sourcePositionColumn = newColumn
-                            }
-                    yield $ Right (c, position)
-                    loop newPosition BS.empty
-          loop (SourcePosition { 
-                    sourcePositionByteOffset = 0,
-                    sourcePositionCharacterOffset = 0,
-                    sourcePositionLine = 1,
-                    sourcePositionColumn = 1
-                  })
-                BS.empty
-        spanForBytes position byteString =
-          let endPosition =
-                position {
-                    sourcePositionByteOffset =
-                      sourcePositionByteOffset position + BS.length byteString
-                  }
-          in SourceSpan {
-                 sourceSpanStart = position,
-                 sourceSpanEnd = endPosition
-               }
+readFile filePath = do
+  let file = FileSourceFileSpecification filePath
+  sourceFile filePath $= toBytes $= addSourcePositions file
+
+
+readTerminal
+  :: Source IO (Either Diagnostic (Char, SourcePosition))
+readTerminal = do
+  let file = TerminalSourceFileSpecification
+  let loop = do
+        liftIO $ IO.putStr "> "
+        liftIO $ IO.hFlush IO.stdout
+        line <- liftIO BS.getLine
+        yield line
+        loop
+  loop $= toBytes $= addSourcePositions file
+
+
+toBytes :: (Monad m) => Conduit BS.ByteString m Word8
+toBytes = do
+  maybeByteString <- await
+  case maybeByteString of
+    Nothing -> return ()
+    Just byteString -> do
+      mapM_ yield $ BS.unpack byteString
+      toBytes
+
+
+addSourcePositions
+  :: (Monad m)
+  => SourceFileSpecification
+  -> Conduit Word8 m (Either Diagnostic (Char, SourcePosition))
+addSourcePositions file = do
+  let loop position byteString = do
+        case UTF8.decode byteString of
+          Left UTF8.InvalidDataDecodingFailure -> do
+            diagnoseInvalidUTF8 file
+              $ spanForBytes position byteString
+          Left UTF8.InsufficientDataDecodingFailure -> do
+            maybeByte <- await
+            case maybeByte of
+              Nothing -> do
+                if BS.null byteString
+                  then return ()
+                  else diagnoseUnexpectedEndOfFileInUTF8 file
+                         $ spanForBytes position byteString
+              Just byte -> loop position $ BS.snoc byteString byte
+          Right (c, _) -> do
+            let byteCount = BS.length byteString
+                oldByteOffset = sourcePositionByteOffset position
+                oldCharacterOffset =
+                  sourcePositionCharacterOffset position
+                oldLine = sourcePositionLine position
+                oldColumn = sourcePositionColumn position
+                newByteOffset = oldByteOffset + byteCount
+                newCharacterOffset = oldCharacterOffset + 1
+                isNewline = c == '\n'
+                newLine = if isNewline
+                            then oldLine + 1
+                            else oldLine
+                newColumn = if isNewline
+                              then 1
+                              else oldColumn + 1
+                newPosition =
+                  SourcePosition {
+                      sourcePositionByteOffset = newByteOffset,
+                      sourcePositionCharacterOffset =
+                        newCharacterOffset,
+                      sourcePositionLine = newLine,
+                      sourcePositionColumn = newColumn
+                    }
+            yield $ Right (c, position)
+            loop newPosition BS.empty
+  loop (SourcePosition { 
+            sourcePositionByteOffset = 0,
+            sourcePositionCharacterOffset = 0,
+            sourcePositionLine = 1,
+            sourcePositionColumn = 1
+          })
+        BS.empty
+
+
+spanForBytes :: SourcePosition -> BS.ByteString -> SourceSpan
+spanForBytes position byteString =
+  let endPosition =
+        position {
+            sourcePositionByteOffset =
+              sourcePositionByteOffset position + BS.length byteString
+          }
+  in SourceSpan {
+         sourceSpanStart = position,
+         sourceSpanEnd = endPosition
+       }
 
 
 diagnoseInvalidUTF8

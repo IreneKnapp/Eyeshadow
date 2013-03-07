@@ -1,4 +1,4 @@
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE OverloadedStrings, Rank2Types #-}
 module Main (main) where
 
 import qualified Data.Text as T
@@ -17,12 +17,12 @@ import Eyeshadow.Types
 
 import Prelude
   (Bool(..),
+   Char(..),
    Either(..),
    Maybe(..),
    String,
    Int,
    IO,
-   show,
    (.),
    ($),
    (==),
@@ -33,35 +33,52 @@ main :: IO ()
 main = do
   arguments <- IO.getArgs
   let (diagnostics, options, arguments') = takeOptions arguments
-  let eitherUsageInput =
-        case arguments' of
-          [] -> Left usageDiagnostic
-          inputFilePaths -> Right inputFilePaths
-  case (diagnostics, eitherUsageInput) of
-    ([], Right inputFilePaths) -> do
-      diagnostics <- mapM process inputFilePaths >>= return . concat
-      case diagnostics of
-        [] -> return ()
-        _ -> outputDiagnostics options diagnostics
-    (_, Left usage) -> outputDiagnostics options $ diagnostics ++ [usage]
-    _ -> outputDiagnostics options $ diagnostics
+  case (diagnostics, arguments') of
+    ([], inputFilePaths@(_:_)) -> do
+      mapM_ (process options) inputFilePaths
+    ([], []) -> repl options
+    _ -> mapM_ outputDiagnostic options diagnostics
 
 
-process :: IO.FilePath -> IO [Diagnostic]
-process sourcePath = runResourceT $ do
-  readFile sourcePath $= sideStream showIt $= discardRight $$ accumulate
-  where showIt = do
+process :: Options -> IO.FilePath -> IO [Diagnostic]
+process options sourcePath = runResourceT $ do
+  readFile sourcePath $$ consume options
+
+
+repl :: Options -> IO ()
+repl options = do
+  readTerminal $$ consume options
+  liftIO $ IO.putStrLn $ "Managed to end the REPL."
+  repl
+
+
+consume
+  :: (MonadIO m)
+  => Options
+  -> SourceFileSpecification
+  -> Sink (Either Diagnostic (Char, SourcePosition)) m ()
+consume options file = do
+  lex file =$ sideStream showIt =$ discardRight $$ explain
+  where showIt
+          :: (MonadIO m, IO.Show b)
+          => Conduit (b, SourcePosition)
+                     m
+                     (Either Diagnostic (b, SourcePosition))
+        showIt = do
           let loop = do
                 maybeItem <- await
                 case maybeItem of
                   Nothing -> return ()
                   Just (c, position) -> do
                     liftIO $ IO.putStrLn
-                     $ (show $ sourcePositionLine position) ++ ":"
-                       ++ (show $ sourcePositionColumn position)
-                       ++ " " ++ (show c)
+                     $ (IO.show $ sourcePositionLine position) ++ ":"
+                       ++ (IO.show $ sourcePositionColumn position)
+                       ++ " " ++ (IO.show c)
                     loop
           loop
+        discardRight
+          :: (Monad m)
+          => Conduit (Either Diagnostic b) m Diagnostic
         discardRight = do
           let loop = do
                 maybeItem <- await
@@ -72,22 +89,21 @@ process sourcePath = runResourceT $ do
                     loop
                   _ -> loop
           loop
-        accumulate = do
-          let loop soFar = do
-                maybeItem <- await
-                case maybeItem of
-                  Nothing -> return soFar
-                  Just item -> loop $ soFar ++ [item]
-          loop []
+        explain
+          :: (MonadIO m)
+          => Sink Diagnostic m ()
+        explain = do
+          maybeDiagnostic <- await
+          case maybeDiagnostic of
+            Nothing -> return ()
+            Just diagnostic -> do
+              liftIO $ outputDiagnostic options diagnostic
+              explain
 
 
-outputDiagnostics :: Options -> [Diagnostic] -> IO ()
-outputDiagnostics options diagnostics = do
-  mapM_ (\diagnostic -> do
-           IO.putStrLn $ (T.unpack $ diagnosticHeadline diagnostic))
-        diagnostics
-  let n = length diagnostics
-  IO.putStrLn $ (show n) ++ " diagnostic" ++ (if n == 1 then "" else "s")
+outputDiagnostic :: Options -> Diagnostic -> IO ()
+outputDiagnostic options diagnostic = do
+  IO.putStrLn $ (T.unpack $ diagnosticHeadline diagnostic)
 
 
 takeOptions :: [String] -> ([Diagnostic], Options, [String])
@@ -154,3 +170,4 @@ unknownOptionDiagnostic option =
             "try again without it."],
        diagnosticDetails = []
      }
+

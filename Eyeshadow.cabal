@@ -28,6 +28,8 @@ Source-Repository head
 Executable eyeshadow
   main-is: Main.hs
   other-modules: Eyeshadow.Conduit,
+                 Eyeshadow.Lexical,
+                 Eyeshadow.Spans,
                  Eyeshadow.Types,
                  Eyeshadow.UTF8
   hs-source-dirs: Haskell
