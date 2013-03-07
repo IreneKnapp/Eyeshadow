@@ -12,12 +12,13 @@ import Data.List
 
 import Eyeshadow.Conduit
 import Eyeshadow.Lexical
+import Eyeshadow.Spans
 import Eyeshadow.Types
 
 
 import Prelude
   (Bool(..),
-   Char(..),
+   Char,
    Either(..),
    Maybe(..),
    String,
@@ -33,47 +34,52 @@ main :: IO ()
 main = do
   arguments <- IO.getArgs
   let (diagnostics, options, arguments') = takeOptions arguments
-  case (diagnostics, arguments') of
-    ([], inputFilePaths@(_:_)) -> do
+  case (diagnostics, invocationOptionsMode options, arguments') of
+    ([], HelpInvocationMode, _) -> outputDiagnostic options usageDiagnostic
+    ([], CompilationInvocationMode, inputFilePaths@(_:_)) -> do
       mapM_ (process options) inputFilePaths
-    ([], []) -> repl options
-    _ -> mapM_ outputDiagnostic options diagnostics
+    ([], CompilationInvocationMode, []) -> repl options
+    _ -> mapM_ (outputDiagnostic options) diagnostics
 
 
-process :: Options -> IO.FilePath -> IO [Diagnostic]
+process :: InvocationOptions -> IO.FilePath -> IO ()
 process options sourcePath = runResourceT $ do
-  readFile sourcePath $$ consume options
+  let file = FileSourceFileSpecification sourcePath
+  readFile file $$ consume options file
 
 
-repl :: Options -> IO ()
+repl :: InvocationOptions -> IO ()
 repl options = do
-  readTerminal $$ consume options
-  liftIO $ IO.putStrLn $ "Managed to end the REPL."
-  repl
+  let file = TerminalSourceFileSpecification
+      loop = do
+        readTerminal file $$ consume options file
+        liftIO $ IO.putStrLn $ "Managed to end the REPL."
+        loop
+  loop
 
 
 consume
   :: (MonadIO m)
-  => Options
+  => InvocationOptions
   -> SourceFileSpecification
-  -> Sink (Either Diagnostic (Char, SourcePosition)) m ()
-consume options file = do
-  lex file =$ sideStream showIt =$ discardRight $$ explain
+  -> Consumer (Either Diagnostic (Char, SourcePosition)) m ()
+consume options file =
+  sideStream (lex file) =$= sideStream showIt =$= discardRight =$= explain
   where showIt
-          :: (MonadIO m, IO.Show b)
-          => Conduit (b, SourcePosition)
-                     m
-                     (Either Diagnostic (b, SourcePosition))
+          :: (MonadIO m)
+          => Conduit SExpression m (Either Diagnostic SExpression)
         showIt = do
           let loop = do
                 maybeItem <- await
                 case maybeItem of
                   Nothing -> return ()
-                  Just (c, position) -> do
+                  Just expression -> do
+                    let span = expressionSpan expression
+                        position = sourceSpanStart span
                     liftIO $ IO.putStrLn
                      $ (IO.show $ sourcePositionLine position) ++ ":"
                        ++ (IO.show $ sourcePositionColumn position)
-                       ++ " " ++ (IO.show c)
+                       ++ " " ++ (T.unpack $ show expression)
                     loop
           loop
         discardRight
@@ -91,7 +97,7 @@ consume options file = do
           loop
         explain
           :: (MonadIO m)
-          => Sink Diagnostic m ()
+          => Consumer Diagnostic m ()
         explain = do
           maybeDiagnostic <- await
           case maybeDiagnostic of
@@ -101,26 +107,30 @@ consume options file = do
               explain
 
 
-outputDiagnostic :: Options -> Diagnostic -> IO ()
+outputDiagnostic :: InvocationOptions -> Diagnostic -> IO ()
 outputDiagnostic options diagnostic = do
   IO.putStrLn $ (T.unpack $ diagnosticHeadline diagnostic)
 
 
-takeOptions :: [String] -> ([Diagnostic], Options, [String])
+takeOptions :: [String] -> ([Diagnostic], InvocationOptions, [String])
 takeOptions arguments =
   let loop ("--" : rest) diagnosticsSoFar optionsSoFar =
         (diagnosticsSoFar, optionsSoFar, rest)
+      loop ("--help" : rest) diagnosticsSoFar optionsSoFar =
+        loop rest diagnosticsSoFar $ optionsSoFar {
+                        invocationOptionsMode = HelpInvocationMode
+                      }
       loop ("--text" : rest) diagnosticsSoFar optionsSoFar =
         loop rest diagnosticsSoFar $ optionsSoFar {
-                        optionsOutputFormat = TextOutputFormat
+                        invocationOptionsOutputFormat = TextOutputFormat
                       }
       loop ("--terminal" : rest) diagnosticsSoFar optionsSoFar =
         loop rest diagnosticsSoFar $ optionsSoFar {
-                        optionsOutputFormat = TerminalOutputFormat
+                        invocationOptionsOutputFormat = TerminalOutputFormat
                       }
       loop ("--json" : rest) diagnosticsSoFar optionsSoFar =
         loop rest diagnosticsSoFar $ optionsSoFar {
-                        optionsOutputFormat = JSONOutputFormat
+                        invocationOptionsOutputFormat = JSONOutputFormat
                       }
       loop (option@('-' : _) : rest) diagnosticsSoFar optionsSoFar =
         loop rest (diagnosticsSoFar ++ [unknownOptionDiagnostic option])
@@ -128,9 +138,10 @@ takeOptions arguments =
       loop rest diagnosticsSoFar optionsSoFar =
         (diagnosticsSoFar, optionsSoFar, rest)
   in loop arguments []
-      $ Options {
-            optionsOutputFormat = TerminalOutputFormat,
-            optionsOutputSourceSnippets = True
+      $ InvocationOptions {
+            invocationOptionsOutputFormat = TerminalOutputFormat,
+            invocationOptionsOutputSourceSnippets = True,
+            invocationOptionsMode = CompilationInvocationMode
           }
 
 

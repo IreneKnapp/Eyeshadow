@@ -1,7 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Eyeshadow.Types
   (Show(..),
-   Options(..),
+   InvocationMode(..),
+   InvocationOptions(..),
    OutputFormat(..),
    SourceFileSpecification(..),
    SourcePosition(..),
@@ -24,11 +25,15 @@ import Prelude
 class Show showable where
   show :: showable -> T.Text
 
+data InvocationMode
+  = HelpInvocationMode
+  | CompilationInvocationMode
 
-data Options =
-  Options {
-      optionsOutputFormat :: OutputFormat,
-      optionsOutputSourceSnippets :: Bool
+data InvocationOptions =
+  InvocationOptions {
+      invocationOptionsOutputFormat :: OutputFormat,
+      invocationOptionsOutputSourceSnippets :: Bool,
+      invocationOptionsMode :: InvocationMode
     }
 
 data OutputFormat

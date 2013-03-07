@@ -12,6 +12,7 @@ module Eyeshadow.Conduit
 import Control.Monad
 import Control.Monad.Trans
 import qualified Data.ByteString as BS
+import qualified Data.Char as Char
 import Data.Conduit
 import Data.Conduit.Binary
 import Data.Conduit.Internal hiding (await, yield)
@@ -106,22 +107,25 @@ byCharacter = do
 
 
 readFile
-  :: FilePath
+  :: SourceFileSpecification
   -> Source (ResourceT IO) (Either Diagnostic (Char, SourcePosition))
-readFile filePath = do
-  let file = FileSourceFileSpecification filePath
-  sourceFile filePath $= toBytes $= addSourcePositions file
+readFile file = do
+  case file of
+    FileSourceFileSpecification filePath -> do
+      sourceFile filePath $= toBytes $= addSourcePositions file
+    _ -> return ()
 
 
 readTerminal
-  :: Source IO (Either Diagnostic (Char, SourcePosition))
-readTerminal = do
-  let file = TerminalSourceFileSpecification
+  :: SourceFileSpecification
+  -> Source IO (Either Diagnostic (Char, SourcePosition))
+readTerminal file = do
   let loop = do
         liftIO $ IO.putStr "> "
         liftIO $ IO.hFlush IO.stdout
         line <- liftIO BS.getLine
         yield line
+        yield $ BS.singleton $ fromIntegral $ Char.ord '\n'
         loop
   loop $= toBytes $= addSourcePositions file
 
