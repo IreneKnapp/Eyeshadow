@@ -12,6 +12,7 @@ import Data.List
 
 import Eyeshadow.Conduit
 import Eyeshadow.Lexical
+import Eyeshadow.Process
 import Eyeshadow.Spans
 import Eyeshadow.Types
 
@@ -37,35 +38,48 @@ main = do
   case (diagnostics, invocationOptionsMode options, arguments') of
     ([], HelpInvocationMode, _) -> outputDiagnostic options usageDiagnostic
     ([], CompilationInvocationMode, inputFilePaths@(_:_)) -> do
-      mapM_ (process options) inputFilePaths
-    ([], CompilationInvocationMode, []) -> repl options
+      mapM_ (\sourcePath -> runResourceT $ do
+               let file = FileSourceFileSpecification sourcePath
+               readFile file
+                 $$ consume options file False initialProcessingContext)
+            inputFilePaths
+    ([], CompilationInvocationMode, []) -> do
+      let file = TerminalSourceFileSpecification
+          loop processingContext = do
+            processingContext <-
+              readTerminal file $$ consume options file True processingContext
+            loop processingContext
+      loop initialProcessingContext
     _ -> mapM_ (outputDiagnostic options) diagnostics
-
-
-process :: InvocationOptions -> IO.FilePath -> IO ()
-process options sourcePath = runResourceT $ do
-  let file = FileSourceFileSpecification sourcePath
-  readFile file $$ consume options file
-
-
-repl :: InvocationOptions -> IO ()
-repl options = do
-  let file = TerminalSourceFileSpecification
-      loop = do
-        readTerminal file $$ consume options file
-        liftIO $ IO.putStrLn $ "Managed to end the REPL."
-        loop
-  loop
 
 
 consume
   :: (MonadIO m)
   => InvocationOptions
   -> SourceFileSpecification
-  -> Consumer (Either Diagnostic (Char, SourcePosition)) m ()
-consume options file =
-  sideStream (lex file) =$= sideStream showIt =$= discardRight =$= explain
-  where showIt
+  -> Bool
+  -> ProcessingContext
+  -> Sink (Either Diagnostic (Char, SourcePosition)) m ProcessingContext
+consume options file interactive processingContext =
+  sideStream (lex file)
+  $= sideStream processingScope
+  $$ sideStream (process options file processingContext)
+  =$ sideStream showIt
+  =$ discardRight
+  =$ explain
+  return processingContext
+  where processingScope
+          :: (MonadIO m)
+          => Conduit SExpression m (Either Diagnostic SExpression)
+        processingScope = do
+          maybeItem <- await
+          case maybeItem of
+            Nothing -> return ()
+            Just item -> yield $ Right item
+          if interactive
+            then return ()
+            else processingScope
+        showIt
           :: (MonadIO m)
           => Conduit SExpression m (Either Diagnostic SExpression)
         showIt = do
@@ -80,6 +94,7 @@ consume options file =
                      $ (IO.show $ sourcePositionLine position) ++ ":"
                        ++ (IO.show $ sourcePositionColumn position)
                        ++ " " ++ (T.unpack $ show expression)
+                    yield $ Right expression
                     loop
           loop
         discardRight
