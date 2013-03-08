@@ -1,42 +1,22 @@
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE NoImplicitPrelude, OverloadedStrings #-}
 module Eyeshadow.Types
-  (Show(..),
-   InvocationMode(..),
+  (InvocationMode(..),
    InvocationOptions(..),
-   OutputFormat(..),
-   SourceFileSpecification(..),
-   SourcePosition(..),
-   SourceSpan(..),
-   Diagnostic(..),
-   SExpression(..),
    Declaration(..),
    Name(..),
    NameComponent(..),
    Visibility(..),
    Term(..),
    Pattern(..),
-   PredefinedValue(..),
-   ProcessingContext(..))
+   PredefinedValue(..))
   where
 
 import qualified Data.Map as Map
 import qualified Data.Text as T
-import qualified Prelude as Prelude
+import qualified Prelude
 
-import Data.Maybe
-
-import Prelude
-  (Bool(..),
-   Eq(..),
-   Ord(..),
-   FilePath,
-   Int,
-   map,
-   ($))
-
-
-class Show showable where
-  show :: showable -> T.Text
+import Eyeshadow.Diagnostic
+import Eyeshadow.Prelude
 
 
 data InvocationMode
@@ -46,72 +26,9 @@ data InvocationMode
 
 data InvocationOptions =
   InvocationOptions {
-      invocationOptionsOutputFormat :: OutputFormat,
-      invocationOptionsOutputSourceSnippets :: Bool,
+      invocationOptionsDiagnostic :: DiagnosticOptions,
       invocationOptionsMode :: InvocationMode
     }
-
-
-data OutputFormat
-  = TextOutputFormat
-  | TerminalOutputFormat
-  | JSONOutputFormat
-
-
-data SourceFileSpecification
-  = FileSourceFileSpecification FilePath
-  | TerminalSourceFileSpecification
-
-
-data SourcePosition =
-  SourcePosition {
-      sourcePositionByteOffset :: Int,
-      sourcePositionCharacterOffset :: Int,
-      sourcePositionLine :: Int,
-      sourcePositionColumn :: Int
-    }
-
-
-data SourceSpan =
-  SourceSpan {
-      sourceSpanStart :: SourcePosition,
-      sourceSpanEnd :: SourcePosition
-    }
-
-
-data Diagnostic =
-  Diagnostic {
-      diagnosticHeadline :: T.Text,
-      diagnosticDescription :: T.Text,
-      diagnosticDetails :: [(T.Text, SourceFileSpecification, SourceSpan)]
-    }
-
-
-data SExpression
-  = SNumber SourceSpan T.Text
-  | SString SourceSpan T.Text
-  | SSymbol SourceSpan [T.Text]
-  | SList SourceSpan [SExpression]
-  | SQuoted SourceSpan SExpression
-  | SQuasiquoted SourceSpan SExpression
-  | SAntiquoted SourceSpan SExpression
-instance Show SExpression where
-  show (SNumber _ int) = int
-  show (SString _ string) =
-    T.concat ["\"",
-              T.foldl' (\soFar c ->
-                          T.concat [soFar,
-                                    case c of
-                                      '"' -> "\"\""
-                                      _ -> T.singleton c])
-                       string
-              "\""]
-  show (SSymbol _ parts) = T.intercalate ":" parts
-  show (SList _ items) =
-    T.concat ["(", T.intercalate " " $ map show items, ")"]
-  show (SQuoted _ item) = T.concat ["'", show item]
-  show (SQuasiquoted _ item) = T.concat ["`", show item]
-  show (SAntiquoted _ item) = T.concat [",", show item]
 
 
 data Declaration
@@ -128,7 +45,7 @@ data Declaration
   -- is just sufficient to invoke this declaration exactly once, thereby
   -- loading a language.
   
-  | FileDeclaration FilePath
+  | FileDeclaration Prelude.FilePath
   -- All modules defined at the top level in the named file are loaded and
   -- become visible in the module namespace for the remainder of the source
   -- file or interactive session where this declaration appears.
@@ -160,6 +77,10 @@ data Declaration
   -- 
   -- Normally one also wishes to call the module as well as open it; for this
   -- purpose there is a declaration macro.
+
+  | RepublishModuleDeclaration Name
+  -- As OpenModuleDeclaration, and in addion, all published definitions from
+  -- the module thus identified are also published from the current module.
   
   | BindModuleDeclaration Name NameComponent Visibility
   -- The given name is resolved relative to the current module, which must
@@ -391,6 +312,9 @@ data PredefinedValue
   
   | OpenModuleDeclarationPredefinedValue
   -- Takes one parameter, a name.  Evaluates to an open-module declaration.
+
+  | RepublishModuleDeclarationPredefinedValue
+  -- Takes one parameter, a name.  Evaluates to a republish-module declaration.
   
   | BindModuleDeclarationPredefinedValue
   -- Takes three parameters: a name; another name which must be relative and
@@ -427,13 +351,4 @@ data PredefinedValue
   | MacroInvocationDeclarationPredefinedValue
   -- Takes one parameter, a term.  Evaluates to a macro-invocation declaration
   -- with the result of evaluating the given term.
-
-
-data ProcessingContext =
-  ProcessingContext {
-      processingContextModuleNamespace :: Map.Map NameComponent Term,
-      processingContextDeclarationNamespace :: Map.Map NameComponent Term,
-      processingContextDefinitionNamespace :: Map.Map NameComponent Term,
-      processingContextCurrentModule :: Maybe Term
-    }
 

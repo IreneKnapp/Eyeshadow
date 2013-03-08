@@ -1,5 +1,5 @@
-{-# LANGUAGE DeriveDataTypeable #-}
-module Eyeshadow.UTF8
+{-# LANGUAGE NoImplicitPrelude, DeriveDataTypeable #-}
+module Eyeshadow.Data.UTF8
   (EncodingFailure(..),
    DecodingFailure(..),
    encode,
@@ -8,22 +8,28 @@ module Eyeshadow.UTF8
 
 import qualified Control.Exception as Exception
 import qualified Data.ByteString as BS
+import qualified Prelude
 
 import Data.Bits
 import Data.Char
+import Data.Either
+import Data.List
+import Data.Maybe
 import Data.Typeable
+
+import Eyeshadow.Prelude
 
 
 data EncodingFailure
   = OutOfRangeEncodingFailure Int
-  deriving (Show, Typeable)
+  deriving (Prelude.Show, Typeable)
 instance Exception.Exception EncodingFailure
 
 
 data DecodingFailure
   = InsufficientDataDecodingFailure
   | InvalidDataDecodingFailure
-  deriving (Show, Typeable)
+  deriving (Prelude.Show, Typeable)
 instance Exception.Exception DecodingFailure
 
 

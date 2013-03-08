@@ -1,5 +1,7 @@
-{-# LANGUAGE OverloadedStrings, Rank2Types #-}
-module Eyeshadow.Lexical (lex) where
+{-# LANGUAGE NoImplicitPrelude, OverloadedStrings, Rank2Types #-}
+module Eyeshadow.Phase.Lexical
+  (lex)
+  where
 
 import qualified Data.Char as Char
 import qualified Data.Conduit.List as Conduit
@@ -9,15 +11,15 @@ import qualified Prelude as IO
 import Control.Monad
 import Data.Char
 import Data.Conduit
-import Data.Either
 import Data.Eq
 import Data.List
 import Data.Ord
 import Data.Maybe
-import Prelude (($), (.), Num(..), Integer)
 
-import Eyeshadow.Spans
-import Eyeshadow.Types
+import Eyeshadow.Diagnostic
+import Eyeshadow.Data.SExpression
+import Eyeshadow.Data.Span
+import Eyeshadow.Prelude
 
 
 data CharacterClassification
@@ -36,43 +38,41 @@ classifyCharacter _ = ConstituentCharacterClassification
 
 
 lex
-  :: (Monad m)
-  => SourceFileSpecification
-  -> Conduit (Char, SourcePosition) m (Either Diagnostic SExpression)
+  :: (MonadDiagnostic m)
+  => FileSpecification
+  -> Conduit (Char, Span) m SExpression
 lex file = do
   let accumulate :: (Monad m)
-                 => ConduitM (Char, SourcePosition)
-                             (Either Diagnostic b)
-                             m
-                             (T.Text, SourceSpan)
+                 => ConduitM (Char, Span) b m (T.Text, Span)
       accumulate = do
         Just (c, start) <- await
-        let loop textSoFar endSoFar = do
+        let loop textSoFar spanSoFar = do
               maybeItem <- Conduit.peek
               case maybeItem of
-                Nothing ->
-                  return (textSoFar, simpleSpan start endSoFar)
-                Just (c, position) ->
+                Nothing -> do
+                  return (textSoFar, spanSoFar)
+                Just (c, _) ->
                   if elem (classifyCharacter c)
                           [DigitCharacterClassification,
                            ConstituentCharacterClassification]
                     then do
-                      _ <- await
-                      loop (T.snoc textSoFar c) position
-                    else
-                      return (textSoFar, simpleSpan start endSoFar)
+                      Just (_, endSoFar) <- await
+                      let span' =
+                            case concatenateSpans [spanSoFar, endSoFar] of
+                              Nothing -> spanSoFar
+                              Just span' -> span'
+                      loop (T.snoc textSoFar c) span'
+                    else do
+                      return (textSoFar, spanSoFar)
         loop (T.singleton c) start
-      readOne :: (Monad m)
+      readOne :: (MonadDiagnostic m)
               => Integer
-              -> ConduitM (Char, SourcePosition)
-                          (Either Diagnostic b)
-                          m
-                          (Maybe SExpression)
+              -> ConduitM (Char, Span) b m (Maybe SExpression)
       readOne quasiquotationDepth = do
         maybeItem <- Conduit.peek
         case maybeItem of
           Nothing -> return Nothing
-          Just (c, position) -> do
+          Just (c, span) -> do
             case classifyCharacter c of
               SpaceCharacterClassification -> do
                 _ <- await
@@ -91,34 +91,43 @@ lex file = do
                     maybeTerminator <- await
                     case (items, maybeTerminator) of
                       ([], Nothing) -> do
-                        let span = singletonSpan position
                         diagnoseMissingRightParenthesis file span
                         return $ Just $ SList span []
-                      ([], Just (_, end)) -> do
-                        let span = simpleSpan position end
-                        diagnoseMissingRightParenthesis file span
-                        return $ Just $ SList span []
+                      ([], Just (_, endSpan)) -> do
+                        let span' = case concatenateSpans [span, endSpan] of
+                                      Nothing -> span
+                                      Just span' -> span'
+                        diagnoseMissingRightParenthesis file span'
+                        return $ Just $ SList span' []
                       (items, Nothing) -> do
-                        let span =
+                        let span' =
                               case concatenateSpans
-                                    $ map expressionSpan items of
-                                Nothing -> singletonSpan position
-                                Just span' -> extendSpanBackward position span'
-                        diagnoseMissingRightParenthesis file span
-                        return $ Just $ SList span items
-                      (items, Just (_, end)) -> do
-                        return $ Just $ SList (simpleSpan position end) items
+                                    $ [span] ++ map spanOf items of
+                                Nothing -> span
+                                Just span' -> span'
+                        diagnoseMissingRightParenthesis file span'
+                        return $ Just $ SList span' items
+                      (items, Just (_, endSpan)) -> do
+                        let span' =
+                              case concatenateSpans
+                                    $ [span]
+                                      ++ map spanOf items
+                                      ++ [endSpan] of
+                                Nothing -> span
+                                Just span' -> span'
+                        return $ Just $ SList span' items
                   ')' -> return Nothing
                   '\'' -> do
                     _ <- await
                     maybeItem <- readOne quasiquotationDepth
                     case maybeItem of
                       Just item -> do
-                        let span = extendSpanBackward position
-                                                      (expressionSpan item)
-                        return $ Just $ SQuoted span item
+                        let span' =
+                              case concatenateSpans [span, spanOf item] of
+                                Nothing -> span
+                                Just span' -> span'
+                        return $ Just $ SQuoted span' item
                       Nothing -> do
-                        let span = singletonSpan position
                         diagnoseMissingQuotedExpression file span
                         return Nothing
                   '`' -> do
@@ -126,11 +135,12 @@ lex file = do
                     maybeItem <- readOne (quasiquotationDepth + 1)
                     case maybeItem of
                       Just item -> do
-                        let span = extendSpanBackward position
-                                                      (expressionSpan item)
-                        return $ Just $ SQuasiquoted span item
+                        let span' =
+                              case concatenateSpans [span, spanOf item] of
+                                Nothing -> span
+                                Just span' -> span'
+                        return $ Just $ SQuasiquoted span' item
                       Nothing -> do
-                        let span = singletonSpan position
                         diagnoseMissingQuasiquotedExpression file span
                         return Nothing
                   ',' -> do
@@ -140,24 +150,21 @@ lex file = do
                         maybeItem <- readOne (quasiquotationDepth - 1)
                         case maybeItem of
                           Just item -> do
-                            let span = extendSpanBackward position
-                                                          (expressionSpan item)
-                            return $ Just $ SAntiquoted span item
+                            let span' =
+                                  case concatenateSpans [span, spanOf item] of
+                                    Nothing -> span
+                                    Just span' -> span'
+                            return $ Just $ SAntiquoted span' item
                           Nothing -> do
-                            let span = singletonSpan position
                             diagnoseMissingUnquotedExpression file span
                             return Nothing
                       else do
-                        let span = singletonSpan position
                         diagnoseUnquoteNotInQuasiquote file span
                         readOne quasiquotationDepth
                   _ -> IO.error $ "Unexpected punctuator " ++ IO.show c ++ "."
-      readMany :: (Monad m)
+      readMany :: (MonadDiagnostic m)
                => Integer
-               -> ConduitM (Char, SourcePosition)
-                           (Either Diagnostic b)
-                           m
-                           [SExpression]
+               -> ConduitM (Char, Span) b m [SExpression]
       readMany quasiquotationDepth = do
         let loop itemsSoFar = do
               maybeItem <- readOne quasiquotationDepth
@@ -165,10 +172,8 @@ lex file = do
                 Nothing -> return itemsSoFar
                 Just item -> loop $ itemsSoFar ++ [item]
         loop []
-      topLevelLoop :: (Monad m)
-                   => Conduit (Char, SourcePosition)
-                              m
-                              (Either Diagnostic SExpression)
+      topLevelLoop :: (MonadDiagnostic m)
+                   => Conduit (Char, Span) m SExpression
       topLevelLoop = do
         maybeItem <- readOne 0
         case maybeItem of
@@ -176,25 +181,21 @@ lex file = do
             maybeTerminator <- await
             case maybeTerminator of
               Nothing -> return ()
-              Just (_, position) -> do
-                let span = SourceSpan {
-                               sourceSpanStart = position,
-                               sourceSpanEnd = position
-                             }
+              Just (_, span) -> do
                 diagnoseMissingLeftParenthesis file span
                 topLevelLoop
           Just item -> do
-            yield $ Right item
+            yield item
             topLevelLoop
   topLevelLoop
 
 
 diagnoseMissingLeftParenthesis
-  :: (Monad m)
-  => SourceFileSpecification
-  -> SourceSpan
-  -> Producer m (Either Diagnostic b)
-diagnoseMissingLeftParenthesis file span = yield $ Left $
+  :: (MonadDiagnostic m)
+  => FileSpecification
+  -> Span
+  -> m ()
+diagnoseMissingLeftParenthesis file span = diagnose $
   Diagnostic {
       diagnosticHeadline =
         "Right parenthesis without matching left parenthesis",
@@ -208,11 +209,11 @@ diagnoseMissingLeftParenthesis file span = yield $ Left $
 
 
 diagnoseMissingRightParenthesis
-  :: (Monad m)
-  => SourceFileSpecification
-  -> SourceSpan
-  -> Producer m (Either Diagnostic b)
-diagnoseMissingRightParenthesis file span = yield $ Left $
+  :: (MonadDiagnostic m)
+  => FileSpecification
+  -> Span
+  -> m ()
+diagnoseMissingRightParenthesis file span = diagnose $
   Diagnostic {
       diagnosticHeadline =
         "Left parenthesis without matching right parenthesis",
@@ -226,11 +227,11 @@ diagnoseMissingRightParenthesis file span = yield $ Left $
 
 
 diagnoseMissingQuotedExpression
-  :: (Monad m)
-  => SourceFileSpecification
-  -> SourceSpan
-  -> Producer m (Either Diagnostic b)
-diagnoseMissingQuotedExpression file span = yield $ Left $
+  :: (MonadDiagnostic m)
+  => FileSpecification
+  -> Span
+  -> m ()
+diagnoseMissingQuotedExpression file span = diagnose $
   Diagnostic {
       diagnosticHeadline = "Quote (tick) not followed by expression",
       diagnosticDescription =
@@ -246,11 +247,11 @@ diagnoseMissingQuotedExpression file span = yield $ Left $
 
 
 diagnoseMissingQuasiquotedExpression
-  :: (Monad m)
-  => SourceFileSpecification
-  -> SourceSpan
-  -> Producer m (Either Diagnostic b)
-diagnoseMissingQuasiquotedExpression file span = yield $ Left $
+  :: (MonadDiagnostic m)
+  => FileSpecification
+  -> Span
+  -> m ()
+diagnoseMissingQuasiquotedExpression file span = diagnose $
   Diagnostic {
       diagnosticHeadline = "Quasiquote (backtick) not followed by expression",
       diagnosticDescription =
@@ -266,11 +267,11 @@ diagnoseMissingQuasiquotedExpression file span = yield $ Left $
 
 
 diagnoseMissingUnquotedExpression
-  :: (Monad m)
-  => SourceFileSpecification
-  -> SourceSpan
-  -> Producer m (Either Diagnostic b)
-diagnoseMissingUnquotedExpression file span = yield $ Left $
+  :: (MonadDiagnostic m)
+  => FileSpecification
+  -> Span
+  -> m ()
+diagnoseMissingUnquotedExpression file span = diagnose $
   Diagnostic {
       diagnosticHeadline = "Unquote (comma) not followed by expression",
       diagnosticDescription =
@@ -285,11 +286,11 @@ diagnoseMissingUnquotedExpression file span = yield $ Left $
 
 
 diagnoseUnquoteNotInQuasiquote
-  :: (Monad m)
-  => SourceFileSpecification
-  -> SourceSpan
-  -> Producer m (Either Diagnostic b)
-diagnoseUnquoteNotInQuasiquote file span = yield $ Left $
+  :: (MonadDiagnostic m)
+  => FileSpecification
+  -> Span
+  -> m ()
+diagnoseUnquoteNotInQuasiquote file span = diagnose $
   Diagnostic {
       diagnosticHeadline = "Unquote (comma) not within quasiquote (backtick)",
       diagnosticDescription =
