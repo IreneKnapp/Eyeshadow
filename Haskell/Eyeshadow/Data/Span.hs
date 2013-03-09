@@ -1,63 +1,133 @@
-module Eyeshadow.Spans
-  (concatenateSpans,
-   extendSpanBackward,
-   extendSpanForward,
-   expressionSpan,
-   singletonSpan,
-   simpleSpan)
+{-# LANGUAGE NoImplicitPrelude #-}
+module Eyeshadow.Data.Span
+  (FileSpecification(..),
+   Scan(..),
+   Span(..),
+   HasSpan(..),
+   concatenateSpans,
+   startScan,
+   advanceScan,
+   advanceScanByEncodingError)
   where
 
-import Eyeshadow.Types
+import qualified Prelude
+
+import Data.Char
+import Data.Functor
+import Data.List
+import Data.Maybe
+
+import Eyeshadow.Prelude
 
 
-concatenateSpans :: [SourceSpan] -> Maybe SourceSpan
+data FileSpecification
+  = FileFileSpecification Prelude.FilePath
+  | TerminalFileSpecification
+
+
+data Scan =
+  Scan {
+      scanByteOffset :: Int,
+      scanCharacterOffset :: Int,
+      scanLine :: Int,
+      scanColumn :: Int
+    }
+
+
+data Span =
+  Span {
+      spanByteOffset :: Int,
+      spanByteLength :: Int,
+      spanCharacterOffset :: Int,
+      spanCharacterLength :: Int,
+      spanStartLine :: Int,
+      spanEndLine :: Int,
+      spanStartColumn :: Int,
+      spanEndColumn :: Int
+    }
+
+
+class HasSpan item where
+  spanOf :: item -> Span
+
+
+concatenateSpans :: [Span] -> Maybe Span
 concatenateSpans spans =
   let maybeFirstAndLast =
         if length spans > 0
           then Just (head spans, last spans)
           else Nothing
-      result = fmap (\(first, last) ->
-                        SourceSpan {
-                            sourceSpanStart = sourceSpanStart first,
-                            sourceSpanEnd = sourceSpanEnd last
-                          })
-                    maybeFirstAndLast
+      result =
+        fmap (\(first, last) ->
+                 Span {
+                     spanByteOffset = spanByteOffset first,
+                     spanByteLength =
+                       spanByteOffset last + spanByteLength last
+                       - spanByteOffset first,
+                     spanCharacterOffset = spanCharacterOffset first,
+                     spanCharacterLength =
+                       spanCharacterOffset last + spanCharacterLength last
+                       - spanCharacterOffset first,
+                     spanStartLine = spanStartLine first,
+                     spanEndLine = spanEndLine last,
+                     spanStartColumn = spanStartColumn first,
+                     spanEndColumn = spanEndColumn last
+                   })
+             maybeFirstAndLast
   in result
 
 
-extendSpanBackward :: SourcePosition -> SourceSpan -> SourceSpan
-extendSpanBackward start span =
-  SourceSpan {
-      sourceSpanStart = start,
-      sourceSpanEnd = sourceSpanEnd span
+startScan :: Scan
+startScan =
+  Scan {
+      scanByteOffset = 0,
+      scanCharacterOffset = 0,
+      scanLine = 1,
+      scanColumn = 1
     }
 
 
-extendSpanForward :: SourceSpan -> SourcePosition -> SourceSpan
-extendSpanForward span end =
-  SourceSpan {
-      sourceSpanStart = sourceSpanStart span,
-      sourceSpanEnd = end
-    }
+advanceScan :: Scan -> Char -> Int -> (Scan, Span)
+advanceScan oldScan c byteLength =
+  let isNewline = c == '\n'
+  in (Scan {
+          scanByteOffset = scanByteOffset oldScan + byteLength,
+          scanCharacterOffset = scanCharacterOffset oldScan + 1,
+          scanLine = if isNewline
+                       then scanLine oldScan + 1
+                       else scanLine oldScan,
+          scanColumn = if isNewline
+                         then 1
+                         else scanColumn oldScan + 1
+        },
+      Span {
+          spanByteOffset = scanByteOffset oldScan,
+          spanByteLength = byteLength,
+          spanCharacterOffset = scanCharacterOffset oldScan,
+          spanCharacterLength = 1,
+          spanStartLine = scanLine oldScan,
+          spanEndLine = scanLine oldScan,
+          spanStartColumn = scanColumn oldScan,
+          spanEndColumn = scanColumn oldScan + 1
+        })
 
 
-expressionSpan :: SExpression -> SourceSpan
-expressionSpan (SNumber span _) = span
-expressionSpan (SString span _) = span
-expressionSpan (SSymbol span _) = span
-expressionSpan (SList span _) = span
-expressionSpan (SQuoted span _) = span
-expressionSpan (SQuasiquoted span _) = span
-expressionSpan (SAntiquoted span _) = span
+advanceScanByEncodingError :: Scan -> Int -> (Scan, Span)
+advanceScanByEncodingError oldScan byteLength =
+  (Scan {
+       scanByteOffset = scanByteOffset oldScan + byteLength,
+       scanCharacterOffset = scanCharacterOffset oldScan,
+       scanLine = scanLine oldScan,
+       scanColumn = scanColumn oldScan
+     },
+   Span {
+       spanByteOffset = scanByteOffset oldScan,
+       spanByteLength = byteLength,
+       spanCharacterOffset = scanCharacterOffset oldScan,
+       spanCharacterLength = 0,
+       spanStartLine = scanLine oldScan,
+       spanEndLine = scanLine oldScan,
+       spanStartColumn = scanColumn oldScan,
+       spanEndColumn = scanColumn oldScan + 1
+     })
 
-
-singletonSpan :: SourcePosition -> SourceSpan
-singletonSpan position = simpleSpan position position
-
-
-simpleSpan :: SourcePosition -> SourcePosition -> SourceSpan
-simpleSpan start end =
-  SourceSpan {
-      sourceSpanStart = start,
-      sourceSpanEnd = end
-    }
