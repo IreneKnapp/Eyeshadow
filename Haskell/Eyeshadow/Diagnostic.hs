@@ -1,4 +1,5 @@
-{-# LANGUAGE NoImplicitPrelude #-}
+{-# LANGUAGE NoImplicitPrelude, FlexibleInstances, FlexibleContexts,
+             MultiParamTypeClasses, TypeFamilies #-}
 module Eyeshadow.Diagnostic
   (DiagnosticOptions(..),
    DiagnosticOutputFormat(..),
@@ -8,12 +9,16 @@ module Eyeshadow.Diagnostic
    runDiagnosticT)
   where
 
-import qualified Data.Conduit as Conduit
 import qualified Data.Text as T
 import qualified System.IO as IO
 
+import Data.Conduit
+import Control.Applicative
 import Control.Monad
+import Control.Monad.Base
 import Control.Monad.Trans
+import Control.Monad.Trans.Control
+import Control.Monad.Trans.Resource
 import Data.List
 
 import Eyeshadow.Data.Span
@@ -41,9 +46,11 @@ data Diagnostic =
     }
 
 
-class (Monad m) => MonadDiagnostic m where
+class (MonadIO m) => MonadDiagnostic m where
   diagnose :: Diagnostic -> m ()
-instance (MonadDiagnostic m) => MonadDiagnostic (Conduit.ConduitM i o m) where
+instance (MonadDiagnostic m) => MonadDiagnostic (ConduitM i o m) where
+  diagnose diagnostic = lift $ diagnose diagnostic
+instance (MonadDiagnostic m) => MonadDiagnostic (ResourceT m) where
   diagnose diagnostic = lift $ diagnose diagnostic
 
 
@@ -65,6 +72,38 @@ instance (MonadIO m) => MonadDiagnostic (DiagnosticT m) where
     return (diagnostics ++ [diagnostic], ())
 instance (MonadIO m) => MonadIO (DiagnosticT m) where
   liftIO action = lift $ liftIO action
+instance (MonadThrow m, MonadIO m) => MonadThrow (DiagnosticT m) where
+  monadThrow e = lift $ monadThrow e
+instance (Functor f) => Functor (DiagnosticT f) where
+  fmap function functor = InDiagnosticT $ \diagnostics ->
+    fmap (\(diagnostics, a) -> (diagnostics, function a))
+         (inDiagnosticTAction functor diagnostics)
+instance (Applicative f, MonadIO f) => Applicative (DiagnosticT f) where
+  pure a = return a
+  (<*>) a b = ap a b
+instance (MonadResource m) => MonadResource (DiagnosticT m) where
+  liftResourceT action = lift $ liftResourceT action
+instance (MonadIO m, MonadBase IO.IO m)
+         => MonadBase IO.IO (DiagnosticT m) where
+  liftBase action = lift $ liftBase action
+instance MonadTransControl DiagnosticT where
+  data StT DiagnosticT a =
+         StDiagnostic { stDiagnosticState :: ([Diagnostic], a) }
+  liftWith action = InDiagnosticT $ \diagnostics -> do
+      result <- action $ \subaction -> do
+        (diagnostics, result) <- inDiagnosticTAction subaction diagnostics
+        return $ StDiagnostic (diagnostics, result)
+      return (diagnostics, result)
+  restoreT action = InDiagnosticT $ \oldDiagnostics -> do
+    result <- action
+    let (newDiagnostics, innerResult) = stDiagnosticState result
+    return (oldDiagnostics ++ newDiagnostics, innerResult)
+instance (MonadIO m, MonadBaseControl IO.IO m)
+         => MonadBaseControl IO.IO (DiagnosticT m) where
+  data StM (DiagnosticT m) a =
+         StMDiagnostic { stMDiagnosticAction :: ComposeSt DiagnosticT m a }
+  liftBaseWith = defaultLiftBaseWith StMDiagnostic
+  restoreM = defaultRestoreM stMDiagnosticAction
 
 
 runDiagnosticT :: (MonadIO m) => DiagnosticOptions -> DiagnosticT m a -> m a

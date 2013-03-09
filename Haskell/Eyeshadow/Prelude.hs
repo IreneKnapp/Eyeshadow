@@ -8,6 +8,7 @@ module Eyeshadow.Prelude
    P.Num(..),
    P.Ord(..),
    Show(..),
+   P.String,
    (P.$), (P..),
    (P.>>=), P.return)
   where

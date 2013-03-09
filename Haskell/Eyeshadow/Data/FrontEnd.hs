@@ -1,10 +1,6 @@
 {-# LANGUAGE NoImplicitPrelude, OverloadedStrings #-}
-module Eyeshadow.Types
-  (InvocationMode(..),
-   InvocationOptions(..),
-   Declaration(..),
-   Name(..),
-   NameComponent(..),
+module Eyeshadow.Data.FrontEnd
+  (Declaration(..),
    Visibility(..),
    Term(..),
    Pattern(..),
@@ -15,20 +11,7 @@ import qualified Data.Map as Map
 import qualified Data.Text as T
 import qualified Prelude
 
-import Eyeshadow.Diagnostic
-import Eyeshadow.Prelude
-
-
-data InvocationMode
-  = HelpInvocationMode
-  | CompilationInvocationMode
-
-
-data InvocationOptions =
-  InvocationOptions {
-      invocationOptionsDiagnostic :: DiagnosticOptions,
-      invocationOptionsMode :: InvocationMode
-    }
+import Eyeshadow.Data.Name
 
 
 data Declaration
@@ -155,13 +138,6 @@ data Declaration
   | MacroInvocationDeclaration Term
   -- The given term is evaluated and its result, which must be a declaration,
   -- is processed and its effects are performed.
-
-
-data Name = Name [NameComponent]
-
-
-data NameComponent = NameComponent T.Text
-  deriving (Eq, Ord)
 
 
 data Visibility

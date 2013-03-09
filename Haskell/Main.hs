@@ -7,34 +7,24 @@ import qualified System.Environment as IO
 
 import Control.Monad
 import Control.Monad.IO.Class
+import Data.Char
 import Data.Conduit
 import Data.List
+import Data.Maybe
 
+import Eyeshadow.Data.FrontEnd
+import Eyeshadow.Data.Options
 import Eyeshadow.Data.SExpression
 import Eyeshadow.Data.Span
 import Eyeshadow.Phase.File
 import Eyeshadow.Phase.Lexical
 import Eyeshadow.Phase.Process
 import Eyeshadow.Diagnostic
+import Eyeshadow.Instances
 import Eyeshadow.Prelude
-import Eyeshadow.Types
 
 
-import Prelude
-  (Bool(..),
-   Char,
-   Either(..),
-   Maybe(..),
-   String,
-   Int,
-   IO,
-   (.),
-   ($),
-   (==),
-   (++))
-
-
-main :: IO ()
+main :: IO.IO ()
 main = do
   arguments <- IO.getArgs
   let (diagnostics, options, arguments') = takeOptions arguments
@@ -44,11 +34,9 @@ main = do
         diagnose usageDiagnostic
     ([], CompilationInvocationMode, inputFilePaths@(_:_)) ->
       runDiagnosticT (invocationOptionsDiagnostic options) $ do
-        mapM_ (\sourcePath -> runResourceT $ do
-                 _ <- runProcessingT $ do
-                        let file = FileFileSpecification sourcePath
-                        readFile file $$ consume options file False
-                 return ())
+        mapM_ (\sourcePath -> runResourceT $ runProcessingT $ do
+                 let file = FileFileSpecification sourcePath
+                 readFile file $$ consume options file False)
               inputFilePaths
     ([], CompilationInvocationMode, []) -> do
       let file = TerminalFileSpecification
