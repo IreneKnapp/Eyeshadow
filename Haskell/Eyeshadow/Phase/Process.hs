@@ -8,12 +8,14 @@ module Eyeshadow.Phase.Process
   where
 
 import qualified Data.Map as Map
+import qualified Data.Text as T
 
 import Control.Applicative
 import Control.Monad
 import Control.Monad.Trans
 import Control.Monad.Trans.Resource
 import Data.Conduit
+import Data.List
 import Data.Maybe
 
 import Eyeshadow.Data.FrontEnd
@@ -37,12 +39,6 @@ data ProcessingContext =
 class (Monad m) => MonadProcessing m where
   getProcessingContext :: m ProcessingContext
   putProcessingContext :: ProcessingContext -> m ()
-  {-
-instance (MonadProcessing m, MonadTrans t, Monad (t m))
-         => MonadProcessing (t m) where
-  getProcessingContext = lift $ getProcessingContext
-  putProcessingContext context = lift $ putProcessingContext context
--}
 
 
 data ProcessingT m a =
@@ -96,9 +92,49 @@ initialProcessingContext =
 
 initialDeclarationNamespace :: Map.Map NameComponent Term
 initialDeclarationNamespace =
+  Map.fromList $ map
+    (\(name, value) -> (NameComponent name, PredefinedValueTerm value))
+    [("language", LanguageDeclarationPredefinedValue)]
+
+
+languageNamespaces
+  :: Map.Map T.Text (Map.Map NameComponent Term, Map.Map NameComponent Term)
+languageNamespaces =
   Map.fromList
-    [(NameComponent "language",
-      PredefinedValueTerm LanguageDeclarationPredefinedValue)]
+    [("eyeshadow2013001", eyeshadow2013001DeclarationNamespace)]
+
+
+eyeshadow2013001DeclarationNamespace :: Map.Map NameComponent Term
+eyeshadow2013001DeclarationNamespace =
+  Map.fromList $ map
+    (\(name, value) -> (NameComponent name, PredefinedValueTerm value))
+    [("type-0", TypePredefinedValue),
+     ("type-n", TypeOfTypesPredefinedValue),
+     ("name", NamePredefinedValue),
+     ("declaration", DeclarationPredefinedValue),
+     ("visibility", VisibilityPredefinedValue),
+     ("numeric", NumericPredefinedValue),
+     ("string", StringPredefinedValue),
+     ("list", ListPredefinedValue),
+     ("folder", FolderPredefinedValue),
+     ("record", RecordTypePredefinedValue),
+     ("record-type", RecordTypeToTypePredefinedValue),
+     ("concatenate-record-types", ConcatenateRecordTypesPredefinedValue),
+     ("map-record-type", MapRecordTypePredefinedValue),
+     ("project-record-field", ProjectRecordFieldPredefinedValue),
+     ("fold-record-type", FoldRecordTypePredefinedValue),
+     ("language", LanguageDeclarationPredefinedValue),
+     ("file", FileDeclarationPredefinedValue),
+     ("current-module", CurrentModuleDeclarationPredefinedValue),
+     ("open-module", OpenModuleDeclarationPredefinedValue),
+     ("republish-module", RepublishModuleDeclarationPredefinedValue),
+     ("bind-module", BindModuleDeclarationPredefinedValue),
+     ("visibility", VisibilityDeclarationPredefinedValue),
+     ("signature", SignatureDeclarationPredefinedValue),
+     ("value", ValueDeclarationPredefinedValue),
+     ("predefined-value", PredefinedValueDeclarationPredefinedValue),
+     ("list", ListDeclarationPredefinedValue),
+     ("macro-expand", MacroInvocationDeclarationPredefinedValue)]
 
 
 process
@@ -107,9 +143,16 @@ process
   -> FileSpecification
   -> Conduit SExpression m Declaration
 process options file = do
-  maybeExpression <- await
-  case maybeExpression of
-    Nothing -> return ()
-    Just expression -> do
-      process options file
-
+  let collect soFar = do
+        maybeExpression <- await
+        case maybeExpression of
+          Nothing -> loop soFar
+          Just expression -> collect (soFar ++ [expression])
+      loop [] = return ()
+      loop (expression : rest) = do
+        maybeExpression <- await
+        case maybeExpression of
+          Nothing -> return ()
+          Just expression -> do
+            process options file
+  collect []
