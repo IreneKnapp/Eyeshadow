@@ -7,6 +7,7 @@ import qualified Data.Text as T
 
 import Data.List
 
+import Eyeshadow.Data.Name
 import Eyeshadow.Data.Span
 import Eyeshadow.Prelude
 
@@ -14,7 +15,7 @@ import Eyeshadow.Prelude
 data SExpression
   = SNumber Span T.Text
   | SString Span T.Text
-  | SSymbol Span [T.Text]
+  | SSymbol Span Name
   | SList Span [SExpression]
   | SQuoted Span SExpression
   | SQuasiquoted Span SExpression
@@ -30,7 +31,8 @@ instance Show SExpression where
                                       _ -> T.singleton c])
                        string
               "\""]
-  show (SSymbol _ parts) = T.intercalate ":" parts
+  show (SSymbol _ (Name parts)) =
+    T.intercalate ":" (map (\(NameComponent part) -> part) parts)
   show (SList _ items) =
     T.concat ["(", T.intercalate " " $ map show items, ")"]
   show (SQuoted _ item) = T.concat ["'", show item]

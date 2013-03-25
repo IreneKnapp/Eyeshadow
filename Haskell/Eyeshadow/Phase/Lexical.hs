@@ -17,6 +17,7 @@ import Data.Ord
 import Data.Maybe
 
 import Eyeshadow.Diagnostic
+import Eyeshadow.Data.Name
 import Eyeshadow.Data.SExpression
 import Eyeshadow.Data.Span
 import Eyeshadow.Prelude
@@ -79,7 +80,8 @@ lex file = do
                 readOne quasiquotationDepth
               ConstituentCharacterClassification -> do
                 (symbol, span) <- accumulate
-                return $ Just $ SSymbol span (T.splitOn ":" symbol)
+                return $ Just $ SSymbol span
+                  $ Name $ map NameComponent (T.splitOn ":" symbol)
               DigitCharacterClassification -> do
                 (possibleNumber, span) <- accumulate
                 return $ Just $ SNumber span possibleNumber
