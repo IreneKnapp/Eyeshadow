@@ -29,13 +29,18 @@ data Declaration
   -- loading a language.
   
   | FileDeclaration Prelude.FilePath
-  -- All modules defined at the top level in the named file are loaded and
+  -- All modules defined at the top level in the named file, which must be
+  -- given as a relative path rather than an absolute one, are loaded and
   -- become visible in the module namespace for the remainder of the source
   -- file or interactive session where this declaration appears.
   -- 
   -- Often one wishes to bind, and possibly to open, all modules within the
   -- file, as well as loading them into the module namespace; for this purpose
   -- there is a declaration macro.
+  
+  | LibraryDeclaration Prelude.FilePath
+  -- As FileDeclaration, but loads the file from a system directory,
+  -- determined by the compiler, rather than from the local project tree.
   
   | CurrentModuleDeclaration Name
   -- A module with the given name is created if it does not already exist,
@@ -47,9 +52,8 @@ data Declaration
   -- 
   -- It might be nice to have this declaration also require the
   -- module to not previously exist, so that modules could not be defined
-  -- across multiple files, but this would also prevent modules from
-  -- aggragating submodules defined each in their own file and being children
-  -- of itself.
+  -- across multiple files, but this would also prevent a module from
+  -- aggragating child submodules defined each in their own file.
   
   | OpenModuleDeclaration Name
   -- The given name is resolved relative to the current module, which must
@@ -217,7 +221,7 @@ data PredefinedValue
 
   | NumericPredefinedValue
   -- The type of number-like values, an inhabitant of Type.
-
+  
   | StringPredefinedValue
   -- The type of string-like values, an inhabitant of Type.
   
@@ -282,6 +286,9 @@ data PredefinedValue
   
   | FileDeclarationPredefinedValue
   -- Takes one parameter, a string.  Evaluates to a file declaration.
+  
+  | LibraryDeclarationPredefinedValue
+  -- Takes one parameter, a string.  Evaluates to a library declaration.
   
   | CurrentModuleDeclarationPredefinedValue
   -- Takes one parameter, a name.  Evaluates to a current-module declaration.

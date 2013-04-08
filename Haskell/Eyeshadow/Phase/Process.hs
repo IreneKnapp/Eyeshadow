@@ -127,6 +127,14 @@ eyeshadow2013001PredefinedValueNamespace =
   Map.fromList $ map
     (\(name, value) -> (name, PredefinedValueTerm value))
     [("type-0", TypePredefinedValue),
+     ...]
+
+
+eyeshadow2013001TermNamespace :: Map.Map NameComponent Term
+eyeshadow2013001TermNamespace =
+  Map.fromList $ map
+    (\(name, value) -> (NameComponent name, PredefinedValueTerm value))
+    [("type-0", TypePredefinedValue),
      ("type-n", TypeOfTypesPredefinedValue),
      ("name", NamePredefinedValue),
      ("declaration", DeclarationPredefinedValue),
@@ -238,3 +246,4 @@ diagnoseUnknownNameAtTopLevel file span = diagnose $
        diagnosticDetails =
          [("Offending name", file, span)]
      }
+
