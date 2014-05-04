@@ -3,9 +3,9 @@ version: 0.1
 build-type: Simple
 license: BSD3
 license-file: LICENSE
-copyright: Copyright (c) 2013 Irene Knapp
+copyright: Copyright (c) 2013, 2014 Irene Knapp
 author: Irene Knapp <irene.knapp@icloud.com>
-maintainer: irene.knapp@icloud.com
+maintainer: Irene Knapp <irene.knapp@icloud.com>
 homepage: http://ireneknapp.com/software/
 bug-reports: https://github.com/IreneKnapp/Eyeshadow/issues/new
 category: Dependent Types
@@ -13,9 +13,9 @@ synopsis: Compiler for a simple dependently-typed programming language.
 Cabal-version: >= 1.10
 Build-type: Simple
 description:
-  This package is a compiler, targeting JavaScript, for a simple
-  dependently-typed programming language.  It is mostly an experiment at
-  present, to allow the author to learn about typesystems.
+  This package is a compiler, targeting JavaScript as well as native code via
+  LLVM, for a simple dependently-typed programming language.  It is mostly an
+  experiment at present, to allow the author to learn about typesystems.
   .
   Release history:
   .
@@ -43,12 +43,13 @@ Executable eyeshadow
   build-depends: base >= 4.1 && < 5,
                  bytestring >= 0.9.2.1 && < 1,
                  conduit >= 1.0.1 && < 2,
-                 containers >= 0.5.0.0 && < 1,
+                 hashable >= 1.2.1.0 && < 2,
                  monad-control >= 0.3.2 && < 1,
                  mtl >= 2.1.1 && < 3,
                  resourcet >= 0.4.4 && < 1,
                  text >= 0.11 && < 1,
                  transformers >= 0.3.0.0 && < 1,
-                 transformers-base >= 0.4.1 && < 1
+                 transformers-base >= 0.4.1 && < 1,
+                 unordered-containers >= 0.2.4.0 && < 1
   ghc-options: -Wall -fno-warn-name-shadowing -fwarn-tabs
   default-language: Haskell2010

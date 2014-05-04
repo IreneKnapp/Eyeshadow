@@ -1,5 +1,5 @@
 {-# LANGUAGE NoImplicitPrelude, OverloadedStrings, FlexibleInstances,
-             FlexibleContexts, UndecidableInstances #-}
+             FlexibleContexts, UndecidableInstances, RecordWildCards #-}
 module Eyeshadow.Phase.Process
   (MonadProcessing(..),
    ProcessingT,
@@ -7,8 +7,8 @@ module Eyeshadow.Phase.Process
    process)
   where
 
-import qualified Data.Map as Map
-import qualified Data.Text as T
+import qualified Data.HashMap.Strict as HashMap
+import qualified Data.Text as Text
 
 import Control.Applicative
 import Control.Monad
@@ -29,9 +29,9 @@ import Eyeshadow.Prelude
 
 data ProcessingContext =
   ProcessingContext {
-      processingContextModuleNamespace :: Map.Map NameComponent Term,
-      processingContextTermNamespace :: Map.Map NameComponent Term,
-      processingContextPredefinedValueNamespace :: Map.Map T.Text Term,
+      processingContextModuleNamespace :: Namespace,
+      processingContextTermNamespace :: Namespace,
+      processingContextPredefinedValueNamespace :: PredefinedValueNamespace,
       processingContextCurrentModule :: Maybe Term
     }
 
@@ -83,33 +83,37 @@ runProcessingT action = do
 initialProcessingContext :: ProcessingContext
 initialProcessingContext =
   ProcessingContext {
-      processingContextModuleNamespace = Map.empty,
+      processingContextModuleNamespace = Namespace HashMap.empty,
       processingContextTermNamespace = initialTermNamespace,
-      processingContextPredefinedValueNamespace = Map.empty,
+      processingContextPredefinedValueNamespace =
+        PredefinedValueNamespace HashMap.empty,
       processingContextCurrentModule = Nothing
     }
 
 
-initialTermNamespace :: Map.Map NameComponent Term
+initialTermNamespace :: Namespace
 initialTermNamespace =
-  Map.fromList $ map
-    (\(name, value) -> (NameComponent name, PredefinedValueTerm value))
+  Namespace $ HashMap.fromList $ map
+    (\(name, value) ->
+      (NameComponent name, (Just $ PredefinedValueTerm value, Nothing)))
     [("language", LanguageDeclarationPredefinedValue)]
 
 
-languageNamespaces
-  :: Map.Map T.Text (Map.Map NameComponent Term, Map.Map T.Text Term)
+languageNamespaces :: LanguageNamespace
 languageNamespaces =
-  Map.fromList
-    [("eyeshadow2013001",
-      (eyeshadow2013001TermNamespace,
-       eyeshadow2013001PredefinedValueNamespace))]
+  LanguageNamespace $ HashMap.fromList
+    [("eyeshadow2014001",
+      (eyeshadow2014001TermNamespace,
+       eyeshadow2014001PredefinedValueNamespace))]
 
 
-eyeshadow2013001TermNamespace :: Map.Map NameComponent Term
-eyeshadow2013001TermNamespace =
-  Map.fromList $ map
-    (\(name, value) -> (NameComponent name, PredefinedValueTerm value))
+eyeshadow2014001TermNamespace :: Namespace
+eyeshadow2014001TermNamespace =
+  Namespace $ HashMap.fromList $ map
+    (\(name, value) ->
+      (NameComponent name,
+       (Just $ PredefinedValueTerm value,
+        Nothing)))
     [("language", LanguageDeclarationPredefinedValue),
      ("file", FileDeclarationPredefinedValue),
      ("current-module", CurrentModuleDeclarationPredefinedValue),
@@ -122,18 +126,10 @@ eyeshadow2013001TermNamespace =
      ("predefined-value", PredefinedValueDeclarationPredefinedValue)]
 
 
-eyeshadow2013001PredefinedValueNamespace :: Map.Map T.Text Term
-eyeshadow2013001PredefinedValueNamespace =
-  Map.fromList $ map
+eyeshadow2014001PredefinedValueNamespace :: PredefinedValueNamespace
+eyeshadow2014001PredefinedValueNamespace =
+  PredefinedValueNamespace $ HashMap.fromList $ map
     (\(name, value) -> (name, PredefinedValueTerm value))
-    [("type-0", TypePredefinedValue),
-     ...]
-
-
-eyeshadow2013001TermNamespace :: Map.Map NameComponent Term
-eyeshadow2013001TermNamespace =
-  Map.fromList $ map
-    (\(name, value) -> (NameComponent name, PredefinedValueTerm value))
     [("type-0", TypePredefinedValue),
      ("type-n", TypeOfTypesPredefinedValue),
      ("name", NamePredefinedValue),
@@ -207,8 +203,22 @@ getDeclarationName
   => Name
   -> m (Maybe Term)
 getDeclarationName (Name components) = do
-  context <- getProcessingContext
-  let namespace = processingContextTermNamespace context
+  ProcessingContext{..} <- getProcessingContext
+  let consider :: [NameComponent]
+               -> Maybe Term
+               -> Namespace
+               -> Maybe Term
+      consider [] maybeResult _ = maybeResult
+      consider [component] _ (Namespace namespace) =
+        case HashMap.lookup component namespace of
+          Just (maybeTerm, _) -> maybeTerm
+          Nothing -> Nothing
+      consider (component : rest) _ (Namespace namespace) =
+        case HashMap.lookup component namespace of
+          Just (maybeTerm, Just subNamespace) ->
+            consider rest maybeTerm subNamespace
+          _ -> Nothing
+  return $ consider components Nothing processingContextTermNamespace
 
 
 diagnoseInvalidFormAtTopLevel
@@ -220,7 +230,7 @@ diagnoseInvalidFormAtTopLevel file span = diagnose $
   Diagnostic {
        diagnosticHeadline = "Invalid form at top-level",
        diagnosticDescription =
-         T.concat
+         Text.concat
            ["Only module directives, declarations, and macro invocations ",
             "that expand to these are allowed at the top level of a file.  ",
             "Most likely the offending form is either a literal value, or an ",
@@ -241,9 +251,8 @@ diagnoseUnknownNameAtTopLevel file span = diagnose $
   Diagnostic {
        diagnosticHeadline = "Unknown name at top-level",
        diagnosticDescription =
-         T.concat
+         Text.concat
            ["This name is not known to me."],
        diagnosticDetails =
          [("Offending name", file, span)]
      }
-

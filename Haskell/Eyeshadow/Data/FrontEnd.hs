@@ -4,18 +4,23 @@ module Eyeshadow.Data.FrontEnd
    Visibility(..),
    Term(..),
    Pattern(..),
-   PredefinedValue(..))
+   PredefinedValue(..),
+   LanguageNamespace(..),
+   PredefinedValueNamespace(..),
+   Namespace(..))
   where
 
-import qualified Data.Map as Map
-import qualified Data.Text as T
+import qualified Data.HashMap.Strict as HashMap
+import qualified Data.Text as Text
 import qualified Prelude
+
+import Data.Maybe
 
 import Eyeshadow.Data.Name
 
 
 data Declaration
-  = LanguageDeclaration T.Text
+  = LanguageDeclaration Text.Text
   -- This replaces the declaration namespace with a set of bindings drawn from
   -- a set of possibilities predefined by the compiler; makes there be no
   -- current module; and replaces the definition namespace with a set of
@@ -154,12 +159,12 @@ data Visibility
   -- symbol-lookup rules, they must be qualified appropriately.)
   | PrivateVisibility
   -- Definitions that are "private" are visible only when the current module
-  -- is the module they are defined in, or a child of it.
+  -- is either the module they are defined in, or a child of it.
 
 
 data Term
-  = NumericTerm T.Text
-  | StringTerm T.Text
+  = NumericTerm Text.Text
+  | StringTerm Text.Text
   | ListTerm [Term]
   | QuotedTerm Term
   | QuasiquotedTerm Term
@@ -174,7 +179,7 @@ data Term
   -- Typically used to augment the automatically-inferred type information,
   -- this evaluates to the result of evaluating the first given term, and has
   -- the second given term as its type.
-  | RecordTerm (Map.Map Name Term)
+  | RecordTerm (HashMap.HashMap Name Term)
   -- This may be either a record value, or a record type, depending upon the
   -- kind of the terms within the record.  Furthermore, modules and records
   -- are actually the same thing, so this may also be a module, with its
@@ -189,8 +194,8 @@ data Term
 
 data Pattern
   = WildcardPattern
-  | NumericPattern T.Text
-  | StringPattern T.Text
+  | NumericPattern Text.Text
+  | StringPattern Text.Text
   | ListPattern [Pattern]
   | QuotedPattern Pattern
   | QuasiquotedPattern Pattern
@@ -335,3 +340,12 @@ data PredefinedValue
   -- Takes one parameter, a term.  Evaluates to a macro-invocation declaration
   -- with the result of evaluating the given term.
 
+
+data LanguageNamespace =
+  LanguageNamespace
+    (HashMap.HashMap Text.Text (Namespace, PredefinedValueNamespace))
+data PredefinedValueNamespace =
+  PredefinedValueNamespace (HashMap.HashMap Text.Text Term)
+data Namespace =
+  Namespace
+    (HashMap.HashMap NameComponent (Maybe Term, Maybe Namespace))

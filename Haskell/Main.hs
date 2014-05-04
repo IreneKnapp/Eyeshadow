@@ -118,6 +118,22 @@ takeOptions arguments =
                                 JSONDiagnosticOutputFormat
                             }
                       }
+      loop ("--snippets" : rest) diagnosticsSoFar optionsSoFar =
+        loop rest diagnosticsSoFar $ optionsSoFar {
+                        invocationOptionsDiagnostic =
+                          (invocationOptionsDiagnostic optionsSoFar) {
+                              diagnosticOptionsOutputSourceSnippets =
+                                True
+                            }
+                      }
+      loop ("--no-snippets" : rest) diagnosticsSoFar optionsSoFar =
+        loop rest diagnosticsSoFar $ optionsSoFar {
+                        invocationOptionsDiagnostic =
+                          (invocationOptionsDiagnostic optionsSoFar) {
+                              diagnosticOptionsOutputSourceSnippets =
+                                False
+                            }
+                      }
       loop (option@('-' : _) : rest) diagnosticsSoFar optionsSoFar =
         loop rest (diagnosticsSoFar ++ [unknownOptionDiagnostic option])
              optionsSoFar

@@ -12,7 +12,7 @@ import Control.Monad
 import Control.Monad.Trans
 import Data.Char
 import Data.Conduit
-import Data.Conduit.Binary
+import Data.Conduit.Binary (sourceFile)
 import Data.Either
 import Data.Maybe
 import Data.Word
