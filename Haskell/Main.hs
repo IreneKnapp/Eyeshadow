@@ -1,14 +1,18 @@
-{-# LANGUAGE NoImplicitPrelude, OverloadedStrings, Rank2Types #-}
+{-# LANGUAGE NoImplicitPrelude, OverloadedStrings, Rank2Types,
+             FlexibleContexts #-}
 module Main (main) where
 
-import qualified Data.Text as T
+import qualified Control.Eff as Eff
+import qualified Control.Eff.Lift as Eff
+import qualified Control.Eff.Resource as Eff
+import qualified Control.Monad.Trans as Conduit
+import qualified Data.Conduit as Conduit
+import qualified Data.Text as Text
 import qualified Prelude as IO
 import qualified System.Environment as IO
 
 import Control.Monad
-import Control.Monad.IO.Class
 import Data.Char
-import Data.Conduit
 import Data.List
 import Data.Maybe
 
@@ -20,7 +24,6 @@ import Eyeshadow.Phase.File
 import Eyeshadow.Phase.Lexical
 import Eyeshadow.Phase.Process
 import Eyeshadow.Diagnostic
-import Eyeshadow.Instances
 import Eyeshadow.Prelude
 
 
@@ -30,58 +33,60 @@ main = do
   let (diagnostics, options, arguments') = takeOptions arguments
   case (diagnostics, invocationOptionsMode options, arguments') of
     ([], HelpInvocationMode, _) ->
-      runDiagnosticT (invocationOptionsDiagnostic options) $ do
+      Eff.runLift $ runDiagnose (invocationOptionsDiagnostic options) $ do
         diagnose usageDiagnostic
     ([], CompilationInvocationMode, inputFilePaths@(_:_)) ->
-      runDiagnosticT (invocationOptionsDiagnostic options) $ do
-        mapM_ (\sourcePath -> runResourceT $ runProcessingT $ do
+      Eff.runLift $ runDiagnose (invocationOptionsDiagnostic options) $ do
+        mapM_ (\sourcePath -> Eff.runResource $ runProcess $ do
                  let file = FileFileSpecification sourcePath
-                 readFile file $$ consume options file False)
+                 readFile file Conduit.$$ consume options file False)
               inputFilePaths
     ([], CompilationInvocationMode, []) -> do
       let file = TerminalFileSpecification
           loop = do
-            runDiagnosticT (invocationOptionsDiagnostic options) $ do
-              readTerminal file $$ consume options file True
+            runDiagnose (invocationOptionsDiagnostic options) $ do
+              readTerminal file Conduit.$$ consume options file True
             loop
-      _ <- runProcessingT loop
+      _ <- Eff.runLift $ runProcess loop
       return ()
-    _ -> runDiagnosticT (invocationOptionsDiagnostic options) $ do
+    _ -> Eff.runLift $ runDiagnose (invocationOptionsDiagnostic options) $ do
            mapM_ diagnose diagnostics
 
 
 consume
-  :: (MonadIO m, MonadDiagnostic m, MonadProcessing m)
+  :: (Eff.SetMember Eff.Lift (Eff.Lift IO.IO) r,
+      Eff.Member Diagnose r,
+      Eff.Member Process r)
   => InvocationOptions
   -> FileSpecification
   -> Bool
-  -> Sink (Char, Span) m ()
+  -> Conduit.Sink (Char, Span) (Eff.Eff r) ()
 consume options file interactive =
   lex file
-  =$ limitProcessingScopeWhenInteractive
-  =$ process options file
-  =$ showIt
+  Conduit.=$ limitProcessingScopeWhenInteractive
+  Conduit.=$ process options file
+  Conduit.=$ showIt
   where limitProcessingScopeWhenInteractive
-          :: (MonadIO m)
-          => Conduit SExpression m SExpression
+          :: (Eff.SetMember Eff.Lift (Eff.Lift IO.IO) r)
+          => Conduit.Conduit SExpression (Eff.Eff r) SExpression
         limitProcessingScopeWhenInteractive = do
-          maybeItem <- await
+          maybeItem <- Conduit.await
           case maybeItem of
             Nothing -> return ()
-            Just item -> yield item
+            Just item -> Conduit.yield item
           if interactive
             then return ()
             else limitProcessingScopeWhenInteractive
         showIt
-          :: (MonadIO m)
-          => Sink a m ()
+          :: (Eff.SetMember Eff.Lift (Eff.Lift IO.IO) r)
+          => Conduit.Sink a (Eff.Eff r) ()
         showIt = do
           let loop = do
-                maybeItem <- await
+                maybeItem <- Conduit.await
                 case maybeItem of
                   Nothing -> return ()
                   Just item -> do
-                    liftIO $ IO.putStrLn "Okay."
+                    Conduit.lift $ Eff.lift $ IO.putStrLn "Okay."
                     loop
           loop
 
@@ -157,7 +162,7 @@ usageDiagnostic =
        diagnosticHeadline =
          "Usage: eyeshadow [options ...] [--] input.hue ...",
        diagnosticDescription =
-         T.intercalate "\n"
+         Text.intercalate "\n"
            ["--text           Use plain-text output (no color-control",
             "                 sequences) for all diagnostics.",
             "--terminal       Use plain-text output with color-control",
@@ -176,9 +181,9 @@ usageDiagnostic =
 unknownOptionDiagnostic :: String -> Diagnostic
 unknownOptionDiagnostic option =
   Diagnostic {
-       diagnosticHeadline = T.concat ["Unknown option: ", T.pack option],
+       diagnosticHeadline = Text.concat ["Unknown option: ", Text.pack option],
        diagnosticDescription =
-         T.concat
+         Text.concat
            ["This indicates that you (or a shell script) provided a ",
             "command-line option which does not exist with that name in ",
             "this version of the Eyeshadow compiler.  For safety's sake, ",

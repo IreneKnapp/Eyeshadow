@@ -1,18 +1,20 @@
-{-# LANGUAGE NoImplicitPrelude, OverloadedStrings, Rank2Types #-}
+{-# LANGUAGE NoImplicitPrelude, OverloadedStrings, FlexibleContexts #-}
 module Eyeshadow.Phase.File
   (readFile,
    readTerminal)
   where
 
-import qualified Data.ByteString as BS
-import qualified Data.Text as T
+import qualified Control.Eff as Eff
+import qualified Control.Eff.Lift as Eff
+import qualified Control.Eff.Resource as Eff
+import qualified Control.Monad.Trans as Conduit
+import qualified Data.ByteString as ByteString
+import qualified Data.Conduit as Conduit
+import qualified Data.Text as Text
 import qualified System.IO as IO
 
 import Control.Monad
-import Control.Monad.Trans
 import Data.Char
-import Data.Conduit
-import Data.Conduit.Binary (sourceFile)
 import Data.Either
 import Data.Maybe
 import Data.Word
@@ -24,84 +26,109 @@ import Eyeshadow.Prelude
 
 
 readFile
-  :: (MonadResource m, MonadDiagnostic m)
+  :: (Eff.SetMember Eff.Lift (Eff.Lift IO.IO) r,
+      Eff.Member (Eff.Resource (IO.IO ())) r,
+      Eff.Member Diagnose r)
   => FileSpecification
-  -> Source m (Char, Span)
+  -> Conduit.Source (Eff.Eff r) (Char, Span)
 readFile file = do
   case file of
     FileFileSpecification filePath -> do
-      sourceFile filePath $= toBytes $= addSpans file
+      let sourceFile :: (Eff.SetMember Eff.Lift (Eff.Lift IO.IO) r,
+                         Eff.Member (Eff.Resource (IO.IO ())) r)
+                     => IO.FilePath
+                     -> Conduit.Source (Eff.Eff r) ByteString.ByteString
+          sourceFile filePath = do
+            handle <- Conduit.lift $ Eff.lift $
+              IO.openFile filePath IO.ReadMode
+            _ <- Conduit.lift $ Eff.register $ IO.hClose handle
+            let loop = do
+                   byteString <- Conduit.lift $ Eff.lift $
+                     ByteString.hGetSome handle 4096
+                   if ByteString.null byteString
+                     then return ()
+                     else do
+                       Conduit.yield byteString
+                       loop
+            loop
+      sourceFile filePath Conduit.$= toBytes Conduit.$= addSpans file
     _ -> return ()
 
 
 readTerminal
-  :: (MonadIO m, MonadDiagnostic m)
+  :: (Eff.SetMember Eff.Lift (Eff.Lift IO.IO) r,
+      Eff.Member Diagnose r)
   => FileSpecification
-  -> Source m (Char, Span)
+  -> Conduit.Source (Eff.Eff r) (Char, Span)
 readTerminal file = do
-  let loop = do
-        liftIO $ IO.putStr "> "
-        liftIO $ IO.hFlush IO.stdout
-        line <- liftIO BS.getLine
-        yield line
-        yield $ BS.singleton $ fromIntegral $ ord '\n'
+  let loop :: (Eff.SetMember Eff.Lift (Eff.Lift IO.IO) r)
+           => Conduit.Source (Eff.Eff r) ByteString.ByteString
+      loop = do
+        Conduit.lift $ Eff.lift $ IO.putStr "> "
+        Conduit.lift $ Eff.lift $ IO.hFlush IO.stdout
+        line <- Conduit.lift $ Eff.lift ByteString.getLine
+        Conduit.yield line
+        Conduit.yield $ ByteString.singleton $ fromIntegral $ ord '\n'
         loop
-  loop $= toBytes $= addSpans file
+  loop Conduit.$= toBytes Conduit.$= addSpans file
 
 
-toBytes :: (Monad m) => Conduit BS.ByteString m Word8
+toBytes :: (Monad m) => Conduit.Conduit ByteString.ByteString m Word8
 toBytes = do
-  maybeByteString <- await
+  maybeByteString <- Conduit.await
   case maybeByteString of
     Nothing -> return ()
     Just byteString -> do
-      mapM_ yield $ BS.unpack byteString
+      mapM_ Conduit.yield $ ByteString.unpack byteString
       toBytes
 
 
 addSpans
-  :: (MonadDiagnostic m)
+  :: (Eff.Member Diagnose r)
   => FileSpecification
-  -> Conduit Word8 m (Char, Span)
+  -> Conduit.Conduit Word8 (Eff.Eff r) (Char, Span)
 addSpans file = do
   let loop
-        :: (MonadDiagnostic m)
-        => Scan -> BS.ByteString -> Conduit Word8 m (Char, Span)
+        :: (Eff.Member Diagnose r)
+        => Scan -> ByteString.ByteString
+        -> Conduit.Conduit Word8 (Eff.Eff r) (Char, Span)
       loop scan byteString = do
         case decode byteString of
           Left InvalidDataDecodingFailure -> do
             let (newScan, span) =
-                  advanceScanByEncodingError scan (BS.length byteString)
-            diagnoseInvalidUTF8 file span
-            loop newScan BS.empty
+                  advanceScanByEncodingError scan (ByteString.length byteString)
+            Conduit.lift $ diagnoseInvalidUTF8 file span
+            loop newScan ByteString.empty
           Left InsufficientDataDecodingFailure -> do
-            maybeByte <- await
+            maybeByte <- Conduit.await
             case maybeByte of
               Nothing -> do
-                if BS.null byteString
+                if ByteString.null byteString
                   then return ()
                   else let (_, span) =
                              advanceScanByEncodingError scan
-                               (BS.length byteString)
-                       in diagnoseUnexpectedEndOfFileInUTF8 file span
-              Just byte -> loop scan $ BS.snoc byteString byte
+                               (ByteString.length byteString)
+                       in Conduit.lift $
+                            diagnoseUnexpectedEndOfFileInUTF8 file span
+              Just byte -> loop scan $ ByteString.snoc byteString byte
           Right (c, _) -> do
-            let (newScan, span) = advanceScan scan c (BS.length byteString)
-            yield (c, span)
-            loop newScan BS.empty
-  loop startScan BS.empty
+            let (newScan, span) =
+                  advanceScan scan c (ByteString.length byteString)
+            Conduit.yield (c, span)
+            loop newScan ByteString.empty
+  loop startScan ByteString.empty
 
 
 diagnoseInvalidUTF8
-  :: (MonadDiagnostic m)
+  :: (Eff.Member Diagnose r)
   => FileSpecification
   -> Span
-  -> m ()
+  -> Eff.Eff r ()
 diagnoseInvalidUTF8 file span = diagnose $
   Diagnostic {
       diagnosticHeadline = "Invalid UTF-8",
       diagnosticDescription =
-        T.concat
+        Text.concat
           ["This implies that the source file is not valid UTF-8, ",
            "possibly because it has been truncated as by an ",
            "incomplete download.  Verify the integrity of the file."],
@@ -111,15 +138,15 @@ diagnoseInvalidUTF8 file span = diagnose $
 
 
 diagnoseUnexpectedEndOfFileInUTF8
-  :: (MonadDiagnostic m)
+  :: (Eff.Member Diagnose r)
   => FileSpecification
   -> Span
-  -> m ()
+  -> Eff.Eff r ()
 diagnoseUnexpectedEndOfFileInUTF8 file span = diagnose $
   Diagnostic {
        diagnosticHeadline = "Invalid UTF-8 (truncated by end-of-file)",
        diagnosticDescription =
-         T.concat
+         Text.concat
            ["This implies that the source file is not valid UTF-8, ",
             "possibly because it has been truncated as by an ",
             "incomplete download.  Verify the integrity of the file."],

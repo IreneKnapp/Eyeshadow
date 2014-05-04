@@ -1,22 +1,22 @@
 {-# LANGUAGE NoImplicitPrelude, OverloadedStrings, FlexibleInstances,
-             FlexibleContexts, UndecidableInstances, RecordWildCards #-}
+             FlexibleContexts, UndecidableInstances, RecordWildCards,
+             TypeOperators, DeriveDataTypeable #-}
 module Eyeshadow.Phase.Process
-  (MonadProcessing(..),
-   ProcessingT,
-   runProcessingT,
+  (Process,
+   runProcess,
    process)
   where
 
+import qualified Control.Eff as Eff
+import qualified Control.Eff.State.Strict as Eff
+import qualified Control.Monad.Trans as Conduit
+import qualified Data.Conduit as Conduit
 import qualified Data.HashMap.Strict as HashMap
 import qualified Data.Text as Text
 
-import Control.Applicative
-import Control.Monad
-import Control.Monad.Trans
-import Control.Monad.Trans.Resource
-import Data.Conduit
-import Data.List
+import Data.List (map, (++))
 import Data.Maybe
+import Data.Typeable
 
 import Eyeshadow.Data.FrontEnd
 import Eyeshadow.Data.Name
@@ -34,50 +34,10 @@ data ProcessingContext =
       processingContextPredefinedValueNamespace :: PredefinedValueNamespace,
       processingContextCurrentModule :: Maybe Term
     }
+  deriving (Typeable)
 
 
-class (Monad m) => MonadProcessing m where
-  getProcessingContext :: m ProcessingContext
-  putProcessingContext :: ProcessingContext -> m ()
-
-
-data ProcessingT m a =
-  InProcessingT {
-      inProcessingTAction :: ProcessingContext -> m (ProcessingContext, a)
-    }
-instance (MonadIO m) => Monad (ProcessingT m) where
-  (>>=) a b = InProcessingT $ \context -> do
-    (context, v) <- inProcessingTAction a context
-    inProcessingTAction (b v) context
-  return a = InProcessingT $ \context -> return (context, a)
-instance (MonadIO m) => MonadProcessing (ProcessingT m) where
-  getProcessingContext = InProcessingT $ \context -> do
-    return (context, context)
-  putProcessingContext context = InProcessingT $ \_ -> do
-    return (context, ())
-instance MonadTrans ProcessingT where
-  lift action = InProcessingT $ \context -> do
-    result <- action
-    return (context, result)
-instance (MonadIO m) => MonadIO (ProcessingT m) where
-  liftIO action = lift $ liftIO action
-instance (MonadThrow m, MonadIO m) => MonadThrow (ProcessingT m) where
-  monadThrow e = lift $ monadThrow e
-instance (Functor f) => Functor (ProcessingT f) where
-  fmap function functor = InProcessingT $ \context ->
-    fmap (\(context, a) -> (context, function a))
-         (inProcessingTAction functor context)
-instance (Applicative f, MonadIO f) => Applicative (ProcessingT f) where
-  pure a = return a
-  (<*>) a b = ap a b
-instance (MonadResource m) => MonadResource (ProcessingT m) where
-  liftResourceT action = lift $ liftResourceT action
-
-
-runProcessingT :: (MonadIO m) => ProcessingT m a -> m a
-runProcessingT action = do
-  (_, result) <- inProcessingTAction action initialProcessingContext
-  return result
+type Process = Eff.State ProcessingContext
 
 
 initialProcessingContext :: ProcessingContext
@@ -159,34 +119,44 @@ eyeshadow2014001PredefinedValueNamespace =
      ("macro-expand", MacroInvocationDeclarationPredefinedValue)]
 
 
+
+runProcess :: Eff.Eff (Eff.State ProcessingContext Eff.:> r) a
+           -> Eff.Eff r a
+runProcess action = do
+  (_, result) <- Eff.runState initialProcessingContext action
+  return result
+
+
 process
-  :: (MonadDiagnostic m, MonadProcessing m)
+  :: (Eff.Member Diagnose r,
+      Eff.Member (Eff.State ProcessingContext) r)
   => InvocationOptions
   -> FileSpecification
-  -> Conduit SExpression m Declaration
+  -> Conduit.Conduit SExpression (Eff.Eff r) Declaration
 process options file = do
   let collect soFar = do
-        maybeExpression <- await
+        maybeExpression <- Conduit.await
         case maybeExpression of
           Nothing -> loop soFar
           Just expression -> collect (soFar ++ [expression])
       loop [] = return ()
       loop (expression : rest) = do
-        maybeExpression <- await
+        maybeExpression <- Conduit.await
         case maybeExpression of
           Nothing -> return ()
           Just expression -> do
-            lift $ processDeclaration options file expression
+            Conduit.lift $ processDeclaration options file expression
             process options file
   collect []
 
 
 processDeclaration
-  :: (MonadDiagnostic m, MonadProcessing m)
+  :: (Eff.Member (Eff.State ProcessingContext) r,
+      Eff.Member Diagnose r)
   => InvocationOptions
   -> FileSpecification
   -> SExpression
-  -> m ()
+  -> Eff.Eff r ()
 processDeclaration options file expression = do
   case expression of
     SList _ ((SSymbol nameSpan name) : items) -> do
@@ -199,11 +169,11 @@ processDeclaration options file expression = do
 
 
 getDeclarationName
-  :: (MonadProcessing m)
+  :: (Eff.Member (Eff.State ProcessingContext) r)
   => Name
-  -> m (Maybe Term)
+  -> Eff.Eff r (Maybe Term)
 getDeclarationName (Name components) = do
-  ProcessingContext{..} <- getProcessingContext
+  ProcessingContext{..} <- Eff.get
   let consider :: [NameComponent]
                -> Maybe Term
                -> Namespace
@@ -222,10 +192,10 @@ getDeclarationName (Name components) = do
 
 
 diagnoseInvalidFormAtTopLevel
-  :: (MonadDiagnostic m)
+  :: (Eff.Member Diagnose r)
   => FileSpecification
   -> Span
-  -> m ()
+  -> Eff.Eff r ()
 diagnoseInvalidFormAtTopLevel file span = diagnose $
   Diagnostic {
        diagnosticHeadline = "Invalid form at top-level",
@@ -243,10 +213,10 @@ diagnoseInvalidFormAtTopLevel file span = diagnose $
 
 
 diagnoseUnknownNameAtTopLevel
-  :: (MonadDiagnostic m)
+  :: (Eff.Member Diagnose r)
   => FileSpecification
   -> Span
-  -> m ()
+  -> Eff.Eff r ()
 diagnoseUnknownNameAtTopLevel file span = diagnose $
   Diagnostic {
        diagnosticHeadline = "Unknown name at top-level",
