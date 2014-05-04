@@ -28,29 +28,24 @@ import Eyeshadow.Prelude
 
 
 main :: IO.IO ()
-main = do
-  arguments <- IO.getArgs
+main = Eff.runLift $ do
+  arguments <- Eff.lift IO.getArgs
   let (diagnostics, options, arguments') = takeOptions arguments
-  case (diagnostics, invocationOptionsMode options, arguments') of
-    ([], HelpInvocationMode, _) ->
-      Eff.runLift $ runDiagnose (invocationOptionsDiagnostic options) $ do
-        diagnose usageDiagnostic
-    ([], CompilationInvocationMode, inputFilePaths@(_:_)) ->
-      Eff.runLift $ runDiagnose (invocationOptionsDiagnostic options) $ do
+  runDiagnose (invocationOptionsDiagnostic options) $ do
+    case (diagnostics, invocationOptionsMode options, arguments') of
+      ([], HelpInvocationMode, _) -> diagnose usageDiagnostic
+      ([], CompilationInvocationMode, inputFilePaths@(_:_)) -> runProcess $ do
         mapM_ (\sourcePath -> Eff.runResource $ runProcess $ do
                  let file = FileFileSpecification sourcePath
-                 readFile file Conduit.$$ consume options file False)
+                 readFile file Conduit.$$ consume options file)
               inputFilePaths
-    ([], CompilationInvocationMode, []) -> do
-      let file = TerminalFileSpecification
-          loop = do
-            runDiagnose (invocationOptionsDiagnostic options) $ do
-              readTerminal file Conduit.$$ consume options file True
-            loop
-      _ <- Eff.runLift $ runProcess loop
-      return ()
-    _ -> Eff.runLift $ runDiagnose (invocationOptionsDiagnostic options) $ do
-           mapM_ diagnose diagnostics
+      ([], CompilationInvocationMode, []) -> runProcess $ do
+        let file = TerminalFileSpecification
+            loop = do
+              readTerminal file Conduit.$$ consume options file
+              loop
+        loop
+      _ -> mapM_ diagnose diagnostics
 
 
 consume
@@ -59,36 +54,10 @@ consume
       Eff.Member Process r)
   => InvocationOptions
   -> FileSpecification
-  -> Bool
   -> Conduit.Sink (Char, Span) (Eff.Eff r) ()
-consume options file interactive =
+consume options file =
   lex file
-  Conduit.=$ limitProcessingScopeWhenInteractive
   Conduit.=$ process options file
-  Conduit.=$ showIt
-  where limitProcessingScopeWhenInteractive
-          :: (Eff.SetMember Eff.Lift (Eff.Lift IO.IO) r)
-          => Conduit.Conduit SExpression (Eff.Eff r) SExpression
-        limitProcessingScopeWhenInteractive = do
-          maybeItem <- Conduit.await
-          case maybeItem of
-            Nothing -> return ()
-            Just item -> Conduit.yield item
-          if interactive
-            then return ()
-            else limitProcessingScopeWhenInteractive
-        showIt
-          :: (Eff.SetMember Eff.Lift (Eff.Lift IO.IO) r)
-          => Conduit.Sink a (Eff.Eff r) ()
-        showIt = do
-          let loop = do
-                maybeItem <- Conduit.await
-                case maybeItem of
-                  Nothing -> return ()
-                  Just item -> do
-                    Conduit.lift $ Eff.lift $ IO.putStrLn "Okay."
-                    loop
-          loop
 
 
 takeOptions :: [String] -> ([Diagnostic], InvocationOptions, [String])

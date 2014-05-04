@@ -133,21 +133,8 @@ process
   => InvocationOptions
   -> FileSpecification
   -> Conduit.Conduit SExpression (Eff.Eff r) Declaration
-process options file = do
-  let collect soFar = do
-        maybeExpression <- Conduit.await
-        case maybeExpression of
-          Nothing -> loop soFar
-          Just expression -> collect (soFar ++ [expression])
-      loop [] = return ()
-      loop (expression : rest) = do
-        maybeExpression <- Conduit.await
-        case maybeExpression of
-          Nothing -> return ()
-          Just expression -> do
-            Conduit.lift $ processDeclaration options file expression
-            process options file
-  collect []
+process options file = Conduit.awaitForever $ \expression -> do
+ Conduit.lift $ processDeclaration options file expression
 
 
 processDeclaration
