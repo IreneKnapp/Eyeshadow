@@ -1,9 +1,15 @@
-module Unicode.Categories (categorize) where
+{-# LANGUAGE NoImplicitPrelude, OverloadedStrings #-}
+module Eyeshadow.Data.Unicode.Categories (categorize) where
+
+import qualified Data.Text as Text
 
 import Data.Char
+import Data.Maybe
+
+import Eyeshadow.Prelude
 
 
-categorize :: Char -> Maybe String
+categorize :: Char -> Maybe Text.Text
 categorize character =
   let codepoint = ord character
       loop [] = Nothing
