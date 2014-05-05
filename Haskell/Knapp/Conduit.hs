@@ -15,10 +15,6 @@ import Data.Text (Text)
 import qualified Data.Text as T
 
 
-instance (MonadThrow m) => MonadThrow (Pipe l i o u m) where
-  monadThrow error = lift $ monadThrow error
-
-
 split
   :: (Monad m) => Sink a m ra -> Sink b m rb -> Sink (Either a b) m (ra, rb)
 split sinkA sinkB = do
